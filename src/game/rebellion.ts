@@ -9,7 +9,7 @@ import {
 import type { Country, GameState, RebelFaction } from "../types";
 import { sample } from "../utils/random";
 import { cancelAttacksForCountry } from "./battle";
-import { paintWholeCountry } from "./provinces";
+import { normalizeCountryPaint } from "./provinces";
 
 export function updateRebellion(state: GameState, now: number): void {
   if (now < state.nextRebellionCheckAt) {
@@ -108,7 +108,7 @@ function assignCountryToRebelFaction(
   country.displayCountryId = faction.id;
   country.owner = "neutral";
   country.controller = "computer";
-  paintWholeCountry(country, faction.id);
+  normalizeCountryPaint(country);
 
   if (state.networkPlayers.length === 0) {
     state.playerCountryIds = state.playerCountryIds.filter((countryId) => countryId !== country.id);

@@ -3,7 +3,7 @@ import type { Command, CommandContext, CommandResult, Country, GameState } from 
 import { getAttackRoute, type AttackRoute } from "./attackRules";
 import { hasAttackAgainstTarget, removeAttackParticipant, startAttack, stopAttack } from "./battle";
 import { normalizeNickname, setCustomNickname } from "./playerProfile";
-import { paintWholeCountry } from "./provinces";
+import { normalizeCountryPaint } from "./provinces";
 import { getAliveSoldiersInCountry, getCountry } from "./state";
 
 const ATTACK_REACHABLE_ONLY_MESSAGE = "只能进攻相邻国家或隔海可达国家";
@@ -132,7 +132,7 @@ function joinCountry(
   for (const country of target.countries) {
     country.owner = "player";
     country.controller = "human";
-    paintWholeCountry(country, country.controllerCountryId);
+    normalizeCountryPaint(country);
 
     for (const soldier of state.soldiers) {
       if (soldier.countryId === country.id) {

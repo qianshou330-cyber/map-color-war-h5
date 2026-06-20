@@ -67,6 +67,19 @@ export function paintWholeCountry(country: Country, paintCountryId: number): voi
   }
 }
 
+export function normalizeCountryPaint(country: Country): void {
+  paintWholeCountry(country, country.controllerCountryId);
+}
+
+export function normalizeSettledCountryPaint(state: GameState): void {
+  const activeTargetIds = new Set(state.activeAttacks.map((attack) => attack.targetCountryId));
+  for (const country of state.countries) {
+    if (!activeTargetIds.has(country.id)) {
+      normalizeCountryPaint(country);
+    }
+  }
+}
+
 export function getProvinceColor(
   state: GameState,
   country: Country,

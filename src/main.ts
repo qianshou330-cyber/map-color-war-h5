@@ -12,6 +12,7 @@ import { appendCommandLog as appendGameCommandLog } from "./game/commandLog";
 import { createGameState } from "./game/state";
 import { NetworkGameClient, getConfiguredWebSocketUrl, isNetworkModeEnabled } from "./network/client";
 import { MapColorWarScene } from "./phaser/MapColorWarScene";
+import { normalizeSettledCountryPaint } from "./game/provinces";
 import type {
   EditableMapData,
   GameState,
@@ -297,6 +298,7 @@ function applyAuthoritativeState(remoteState: GameState, self: NetworkPlayer | n
 
   const localProfile = state.playerProfile;
   Object.assign(state, remoteState);
+  normalizeSettledCountryPaint(state);
 
   if (self) {
     selfClientId = self.clientId;

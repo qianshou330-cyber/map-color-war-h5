@@ -1,9 +1,11 @@
 import { BATTLE_TICK_MS } from "../constants";
-import type { AttackTask, GameState, Soldier } from "../types";
+import type { AttackTask, Country, GameState, Soldier } from "../types";
 import { distance, randomPointInPolygon } from "../utils/geometry";
+import { canAttackCountry } from "./attackRules";
 import {
   getNearestUnpaintedProvince,
   isCountryFullyPaintedBy,
+  normalizeCountryPaint,
   paintProvinceAtPoint
 } from "./provinces";
 import { randomBorderPatrolPoint } from "./patrol";
@@ -376,6 +378,46 @@ function annexTarget(state: GameState, attack: AttackTask): void {
   stopCounterAttacksFor(state, attack.id);
   cancelAttacksForCountry(state, targetCountry.id);
   cleanupOrphanCounters(state);
+  normalizeCountryPaint(targetCountry);
+  joinOngoingAttacksFromNewCountry(state, targetCountry, attack.conquerorCountryId);
+}
+
+function joinOngoingAttacksFromNewCountry(
+  state: GameState,
+  newCountry: Country,
+  controllerCountryId: number
+): void {
+  for (const attack of state.activeAttacks) {
+    const targetCountry = getCountry(state, attack.targetCountryId);
+    if (
+      !targetCountry ||
+      targetCountry.id === newCountry.id ||
+      targetCountry.controllerCountryId === controllerCountryId ||
+      attack.participantCountryIds.includes(newCountry.id) ||
+      !isAttackSupportedByController(state, attack, controllerCountryId) ||
+      !canAttackCountry(state, newCountry, targetCountry)
+    ) {
+      continue;
+    }
+
+    attack.participantCountryIds = [...new Set([...attack.participantCountryIds, newCountry.id])];
+    recruitAttackersForTask(state, attack);
+  }
+}
+
+function isAttackSupportedByController(
+  state: GameState,
+  attack: AttackTask,
+  controllerCountryId: number
+): boolean {
+  if (attack.conquerorCountryId === controllerCountryId) {
+    return true;
+  }
+
+  return attack.participantCountryIds.some((countryId) => {
+    const country = getCountry(state, countryId);
+    return country?.controllerCountryId === controllerCountryId;
+  });
 }
 
 function ensureCounterAttackTask(state: GameState, attack: AttackTask, now: number): void {
@@ -414,18 +456,18 @@ function getCounterTaskForSource(
 }
 
 function recruitAttackersForTask(state: GameState, attack: AttackTask): void {
-  if (attack.kind !== "counter" || getAttackers(state, attack).length > 0) {
-    return;
-  }
-
   const targetCountry = getCountry(state, attack.targetCountryId);
   if (!targetCountry) {
     return;
   }
 
-  const recruitedAttackers = attack.participantCountryIds.flatMap((countryId) =>
-    selectAttackersFromCountry(state, countryId, targetCountry)
-  );
+  const recruitedAttackers = attack.participantCountryIds.flatMap((countryId) => {
+    if (getAttackSoldierIdsForCountry(state, attack, countryId).size > 0) {
+      return [];
+    }
+
+    return selectAttackersFromCountry(state, countryId, targetCountry);
+  });
   if (recruitedAttackers.length === 0) {
     return;
   }

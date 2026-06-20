@@ -13,7 +13,7 @@ import { getAttackRoute } from "../game/attackRules";
 import { tickGame } from "../game/tick";
 import { getCountryColorById, getProvinceColor, getSoldierColor } from "../game/provinces";
 import { getDisplayNickname } from "../game/playerProfile";
-import { distance, pointInPolygon } from "../utils/geometry";
+import { distance, distanceToSegment, pointInPolygon } from "../utils/geometry";
 
 type RouteCurve = {
   start: Point;
@@ -247,18 +247,68 @@ export class MapColorWarScene extends Phaser.Scene {
   private drawCountry(country: Country): void {
     const isPlayerControlled = this.isPlayerControlledGroup(country.controllerCountryId, [country]);
     const strokeColor = isPlayerControlled ? PLAYER_STROKE_COLOR : NEUTRAL_STROKE_COLOR;
+    const countryPath = new Phaser.Geom.Polygon(country.polygon);
+    const controllerColor = getCountryColorById(this.state, country.controllerCountryId) ?? country.color;
+
+    this.countryGraphics.fillStyle(controllerColor, 0.98);
+    this.countryGraphics.fillPoints(countryPath.points, true);
 
     for (const province of country.provinces) {
       const provincePath = new Phaser.Geom.Polygon(province.polygon);
-      this.countryGraphics.fillStyle(getProvinceColor(this.state, country, province), 0.96);
-      this.countryGraphics.fillPoints(provincePath.points, true);
-      this.countryGraphics.lineStyle(0.55, 0xffffff, 0.18);
+      const isContestedProvince = province.paintCountryId !== country.controllerCountryId;
+      if (isContestedProvince) {
+        this.countryGraphics.fillStyle(getProvinceColor(this.state, country, province), 0.96);
+        this.countryGraphics.fillPoints(provincePath.points, true);
+      }
+      this.countryGraphics.lineStyle(0.45, 0xffffff, isContestedProvince ? 0.16 : 0.06);
       this.countryGraphics.strokePoints(provincePath.points, true);
     }
 
-    const countryPath = new Phaser.Geom.Polygon(country.polygon);
-    this.countryGraphics.lineStyle(isPlayerControlled ? 3 : 1.65, strokeColor, 1);
-    this.countryGraphics.strokePoints(countryPath.points, true);
+    this.drawVisibleCountryBorders(country, strokeColor, isPlayerControlled ? 3 : 1.65);
+  }
+
+  private drawVisibleCountryBorders(country: Country, strokeColor: number, width: number): void {
+    this.countryGraphics.lineStyle(width, strokeColor, 1);
+    for (let index = 0; index < country.polygon.length; index += 1) {
+      const start = country.polygon[index];
+      const end = country.polygon[(index + 1) % country.polygon.length];
+      if (this.isInternalControllerBorder(country, start, end)) {
+        continue;
+      }
+
+      this.countryGraphics.beginPath();
+      this.countryGraphics.moveTo(start.x, start.y);
+      this.countryGraphics.lineTo(end.x, end.y);
+      this.countryGraphics.strokePath();
+    }
+  }
+
+  private isInternalControllerBorder(country: Country, start: Point, end: Point): boolean {
+    const midpoint = {
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2
+    };
+
+    return country.neighbors.some((neighborId) => {
+      const neighbor = this.state.countries[neighborId - 1];
+      return (
+        Boolean(neighbor) &&
+        neighbor.controllerCountryId === country.controllerCountryId &&
+        this.isPointNearPolygonBoundary(midpoint, neighbor.polygon, 3.5)
+      );
+    });
+  }
+
+  private isPointNearPolygonBoundary(point: Point, polygon: Point[], tolerance: number): boolean {
+    for (let index = 0; index < polygon.length; index += 1) {
+      const start = polygon[index];
+      const end = polygon[(index + 1) % polygon.length];
+      if (distanceToSegment(point, start, end) <= tolerance) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private drawLabels(): void {

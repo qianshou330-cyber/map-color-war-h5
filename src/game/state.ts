@@ -21,7 +21,7 @@ import { randomPointInPolygon } from "../utils/geometry";
 import { randomInt } from "../utils/random";
 import { randomBorderPatrolPoint } from "./patrol";
 import { createPlayerProfile } from "./playerProfile";
-import { getSpawnProvince, paintWholeCountry, randomPointInProvince } from "./provinces";
+import { getSpawnProvince, normalizeCountryPaint, randomPointInProvince } from "./provinces";
 
 export function createGameState(
   round = 1,
@@ -87,7 +87,7 @@ export function setCountryOwner(country: Country, owner: Owner): void {
   country.controller = owner === "player" ? "human" : "computer";
   country.controllerCountryId = country.id;
   country.displayCountryId = country.id;
-  paintWholeCountry(country, country.controllerCountryId);
+  normalizeCountryPaint(country);
 }
 
 export function setCountryController(
@@ -101,7 +101,7 @@ export function setCountryController(
   const controlledByPlayer = isControllerOwnedByPlayer(state, controllerCountryId, country.id);
   country.owner = controlledByPlayer ? "player" : "neutral";
   country.controller = controlledByPlayer ? "human" : "computer";
-  paintWholeCountry(country, controllerCountryId);
+  normalizeCountryPaint(country);
 
   if (state.networkPlayers.length === 0) {
     if (controlledByPlayer) {
