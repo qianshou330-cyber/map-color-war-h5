@@ -3,7 +3,8 @@ import {
   MAP_BACKGROUND_COLOR,
   NEUTRAL_STROKE_COLOR,
   PLAYER_STROKE_COLOR,
-  SOLDIER_RADIUS
+  SOLDIER_RADIUS,
+  SOLDIER_RENDER_SMOOTHING
 } from "../constants";
 import type { AttackTask, Biome, Country, GameState, Point, Size, Soldier } from "../types";
 import { getAttackRoute } from "../game/attackRules";
@@ -43,7 +44,11 @@ type LabelGroup = {
   isPlayerGroup: boolean;
   nickname: string | null;
   labelPoint: Point;
+  labelArea: number;
+  fontSize: number;
 };
+
+const SOLDIER_DISPLAY_SNAP_DISTANCE = 48;
 
 export class MapColorWarScene extends Phaser.Scene {
   private state: GameState;
@@ -55,6 +60,8 @@ export class MapColorWarScene extends Phaser.Scene {
   private labelLayer!: Phaser.GameObjects.Container;
   private labels = new Map<number, Phaser.GameObjects.Text>();
   private routeHitAreas: RouteHitArea[] = [];
+  private soldierDisplayPoints = new Map<string, Point>();
+  private soldierDisplaySignature = "";
   private focusedAttackId: string | null = null;
   private focusedCountryId: number | null = null;
   private onStateChanged: () => void;
@@ -105,7 +112,7 @@ export class MapColorWarScene extends Phaser.Scene {
     this.drawCountries();
     this.drawLabels();
     this.drawAttackRoutes(0);
-    this.drawSoldiers();
+    this.drawSoldiers(16);
   }
 
   update(time: number, delta: number): void {
@@ -118,7 +125,7 @@ export class MapColorWarScene extends Phaser.Scene {
     if (this.lastTerrainSignature !== terrainSignature) {
       this.drawTerrain();
     }
-    const labelGroupCount = this.getLabelGroups().length;
+    const labelGroupCount = this.getVisibleLabelGroups().length;
     if (
       this.lastLabelRound !== this.state.round ||
       this.labels.size !== labelGroupCount ||
@@ -130,7 +137,7 @@ export class MapColorWarScene extends Phaser.Scene {
 
     this.drawCountries();
     this.drawAttackRoutes(time);
-    this.drawSoldiers();
+    this.drawSoldiers(delta);
 
     this.elapsedSinceHud += delta;
     if (this.elapsedSinceHud > 120) {
@@ -256,14 +263,14 @@ export class MapColorWarScene extends Phaser.Scene {
     this.labelLayer.removeAll(true);
     this.labels.clear();
 
-    for (const group of this.getLabelGroups()) {
+    for (const group of this.getVisibleLabelGroups()) {
       const labelText = group.isPlayerGroup
         ? `${group.controllerCountryId}\n${group.nickname ?? getDisplayNickname(this.state.playerProfile)}`
         : String(group.controllerCountryId);
       const label = this.add
         .text(group.labelPoint.x, group.labelPoint.y, labelText, {
           fontFamily: "Arial, sans-serif",
-          fontSize: group.isPlayerGroup ? "14px" : "17px",
+          fontSize: `${group.fontSize}px`,
           color: "#06101f",
           fontStyle: "900",
           align: "center",
@@ -280,14 +287,23 @@ export class MapColorWarScene extends Phaser.Scene {
     this.lastLabelSignature = this.getLabelSignature();
   }
 
-  private drawSoldiers(): void {
+  private drawSoldiers(delta = 16): void {
     this.soldierGraphics.clear();
+    this.resetSoldierDisplayCacheIfNeeded();
+    const visibleSoldierIds = new Set<string>();
 
     for (const soldier of this.state.soldiers) {
       if (!soldier.alive) {
         continue;
       }
-      this.drawSoldier(soldier);
+      visibleSoldierIds.add(soldier.id);
+      this.drawSoldier(soldier, this.getSoldierRenderPoint(soldier, delta));
+    }
+
+    for (const soldierId of this.soldierDisplayPoints.keys()) {
+      if (!visibleSoldierIds.has(soldierId)) {
+        this.soldierDisplayPoints.delete(soldierId);
+      }
     }
   }
 
@@ -611,21 +627,67 @@ export class MapColorWarScene extends Phaser.Scene {
     };
   }
 
-  private drawSoldier(soldier: Soldier): void {
+  private getSoldierRenderPoint(soldier: Soldier, delta: number): Point {
+    const targetPoint = { x: soldier.x, y: soldier.y };
+    if (!this.authoritativeRemote) {
+      this.soldierDisplayPoints.set(soldier.id, targetPoint);
+      return targetPoint;
+    }
+
+    const currentPoint = this.soldierDisplayPoints.get(soldier.id);
+    if (!currentPoint || distance(currentPoint, targetPoint) > SOLDIER_DISPLAY_SNAP_DISTANCE) {
+      this.soldierDisplayPoints.set(soldier.id, targetPoint);
+      return targetPoint;
+    }
+
+    const clampedDelta = Math.min(Math.max(delta, 0), 100);
+    const alpha = 1 - Math.exp(-SOLDIER_RENDER_SMOOTHING * (clampedDelta / 1000));
+    const nextPoint = {
+      x: currentPoint.x + (targetPoint.x - currentPoint.x) * alpha,
+      y: currentPoint.y + (targetPoint.y - currentPoint.y) * alpha
+    };
+
+    if (distance(nextPoint, targetPoint) < 0.05) {
+      this.soldierDisplayPoints.set(soldier.id, targetPoint);
+      return targetPoint;
+    }
+
+    this.soldierDisplayPoints.set(soldier.id, nextPoint);
+    return nextPoint;
+  }
+
+  private resetSoldierDisplayCacheIfNeeded(): void {
+    const signature = [
+      this.state.round,
+      this.state.startedAt,
+      this.state.region.id,
+      this.state.region.generationConfig?.seed ?? "",
+      `${this.state.mapSize.width}x${this.state.mapSize.height}`
+    ].join(":");
+
+    if (this.soldierDisplaySignature === signature) {
+      return;
+    }
+
+    this.soldierDisplaySignature = signature;
+    this.soldierDisplayPoints.clear();
+  }
+
+  private drawSoldier(soldier: Soldier, renderPoint: Point): void {
     const color = getSoldierColor(this.state, soldier);
     const active = soldier.status === "attacking" || soldier.status === "fighting";
     const size = SOLDIER_RADIUS * 2;
-    const x = soldier.x - size / 2;
-    const y = soldier.y - size / 2;
+    const x = renderPoint.x - size / 2;
+    const y = renderPoint.y - size / 2;
 
     if (active) {
-      this.soldierGraphics.lineStyle(1.4, 0xffffff, 0.95);
-      this.soldierGraphics.strokeRect(x - 1.8, y - 1.8, size + 3.6, size + 3.6);
+      this.soldierGraphics.lineStyle(1.05, 0xffffff, 0.92);
+      this.soldierGraphics.strokeRect(x - 1.15, y - 1.15, size + 2.3, size + 2.3);
     }
 
     this.soldierGraphics.fillStyle(color, soldier.status === "wandering" ? 0.88 : 0.98);
     this.soldierGraphics.fillRect(x, y, size, size);
-    this.soldierGraphics.lineStyle(0.8, 0x0b1724, soldier.status === "wandering" ? 0.55 : 0.9);
+    this.soldierGraphics.lineStyle(0.65, 0x0b1724, soldier.status === "wandering" ? 0.5 : 0.82);
     this.soldierGraphics.strokeRect(x, y, size, size);
   }
 
@@ -810,9 +872,17 @@ export class MapColorWarScene extends Phaser.Scene {
           countries: sortedCountries,
           isPlayerGroup,
           nickname: networkPlayer?.nickname ?? null,
-          labelPoint: this.getLabelPointForCountries(sortedCountries, isPlayerGroup)
+          labelPoint: this.getLabelPointForCountries(sortedCountries, isPlayerGroup),
+          labelArea: this.getLabelAreaForCountries(sortedCountries),
+          fontSize: this.getLabelFontSize(sortedCountries, isPlayerGroup)
         };
       });
+  }
+
+  private getVisibleLabelGroups(): LabelGroup[] {
+    return this.getLabelGroups().filter(
+      (group) => group.isPlayerGroup || group.labelArea >= this.getMinLabelArea()
+    );
   }
 
   private getNetworkPlayerForGroup(controllerCountryId: number, countries: Country[]) {
@@ -865,18 +935,53 @@ export class MapColorWarScene extends Phaser.Scene {
         : weightedCountries[0].center;
 
     if (countries.some((country) => pointInPolygon(weightedPoint, country.polygon))) {
-      return weightedPoint;
+      const containingCountry = countries.find((country) => pointInPolygon(weightedPoint, country.polygon));
+      return containingCountry ? this.getSafeCountryLabelPoint(containingCountry, weightedPoint) : weightedPoint;
     }
 
     const mainCountry = this.state.playerMainCountryId
       ? countries.find((country) => country.id === this.state.playerMainCountryId)
       : undefined;
     if (preferPlayerArea && mainCountry) {
-      return mainCountry.center;
+      return this.getSafeCountryLabelPoint(mainCountry);
     }
 
-    return [...weightedCountries].sort(
+    const nearestCountry = [...weightedCountries].sort(
       (left, right) => distance(left.center, weightedPoint) - distance(right.center, weightedPoint)
-    )[0].center;
+    )[0];
+    return this.getSafeCountryLabelPoint(nearestCountry);
+  }
+
+  private getSafeCountryLabelPoint(country: Country, preferredPoint?: Point): Point {
+    if (preferredPoint && pointInPolygon(preferredPoint, country.polygon)) {
+      return preferredPoint;
+    }
+
+    const largestProvince = [...country.provinces].sort((left, right) => right.area - left.area)[0];
+    if (largestProvince && pointInPolygon(largestProvince.center, country.polygon)) {
+      return largestProvince.center;
+    }
+
+    if (pointInPolygon(country.center, country.polygon)) {
+      return country.center;
+    }
+
+    return [...country.polygon].sort(
+      (left, right) => distance(left, country.center) - distance(right, country.center)
+    )[0];
+  }
+
+  private getLabelAreaForCountries(countries: Country[]): number {
+    return countries.reduce((sum, country) => sum + country.area, 0);
+  }
+
+  private getLabelFontSize(countries: Country[], isPlayerGroup: boolean): number {
+    const labelArea = this.getLabelAreaForCountries(countries);
+    const maxSize = isPlayerGroup ? 14 : 17;
+    return Math.round(Phaser.Math.Clamp(Math.sqrt(labelArea) / 2.6, 11, maxSize));
+  }
+
+  private getMinLabelArea(): number {
+    return this.state.region.id === "fantasy" ? 620 : 120;
   }
 }

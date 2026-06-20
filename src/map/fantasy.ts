@@ -17,6 +17,7 @@ const TERRAIN_GRID_WIDTH = 160;
 const TERRAIN_GRID_HEIGHT = 90;
 const LAND_POLYGON_STEPS = 48;
 const RIVER_TRACE_STEPS = 64;
+const MIN_TOTAL_PLAYABLE_LAND_AREA = 0.18;
 
 type LandBlob = {
   id: string;
@@ -82,9 +83,13 @@ export function createFantasyRegion(
   savedLandParts?: Point[][]
 ): MapRegion {
   const generationConfig = normalizeMapGenerationConfig(partial);
-  const normalizedParts =
+  const savedPlayableParts =
     savedLandParts && savedLandParts.length > 0
-      ? savedLandParts
+      ? filterPlayableLandParts(savedLandParts, generationConfig)
+      : [];
+  const normalizedParts =
+    savedPlayableParts.length > 0
+      ? savedPlayableParts
       : createFantasyLandParts(generationConfig);
   const totalArea = Math.max(
     0.001,
@@ -94,7 +99,7 @@ export function createFantasyRegion(
     const areaRatio = polygonArea(polygon) / totalArea;
     return {
       id: `fantasy-${index + 1}`,
-      minSeeds: Math.max(1, Math.floor(COUNTRY_COUNT * areaRatio * 0.72)),
+      minSeeds: Math.max(0, Math.floor(COUNTRY_COUNT * areaRatio * 0.58)),
       polygon: scalePolygon(polygon, width, height)
     };
   });
@@ -127,11 +132,71 @@ export function getTerrainCell(terrain: TerrainMap, column: number, row: number)
 
 function createFantasyLandParts(config: MapGenerationConfig): Point[][] {
   const blobs = createLandBlobs(config);
-  return blobs
+  const playableParts = filterPlayableLandParts(
+    blobs
     .filter((blob) => blob.asLandPart)
-    .map((blob) => createLandPolygon(blob, config, blobs))
-    .filter((polygon) => polygon.length >= 8 && polygonArea(polygon) > 0.0025)
+      .map((blob) => createLandPolygon(blob, config, blobs)),
+    config
+  );
+
+  const totalArea = playableParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
+  return totalArea >= MIN_TOTAL_PLAYABLE_LAND_AREA
+    ? playableParts
+    : createFallbackContinent(config);
+}
+
+function filterPlayableLandParts(parts: Point[][], config: MapGenerationConfig): Point[][] {
+  const minArea = getMinPlayableLandPartArea(config);
+  return parts
+    .filter((polygon) => polygon.length >= 8 && polygonArea(polygon) >= minArea)
     .sort((left, right) => polygonArea(right) - polygonArea(left));
+}
+
+function getMinPlayableLandPartArea(config: MapGenerationConfig): number {
+  if (config.worldType === "archipelago") {
+    return 0.018;
+  }
+
+  if (config.worldType === "twinContinents") {
+    return 0.035;
+  }
+
+  return 0.08;
+}
+
+function createFallbackContinent(config: MapGenerationConfig): Point[][] {
+  const rng = createSeededRandom(`${config.seed}:fallback-land`);
+  const blob: LandBlob = {
+    id: "fallback-main",
+    cx: 0.5,
+    cy: 0.52,
+    rx: rng.float(0.38, 0.43),
+    ry: rng.float(0.31, 0.37),
+    strength: 1.08,
+    asLandPart: true
+  };
+  const supportBlobs = [
+    blob,
+    {
+      id: "fallback-north",
+      cx: rng.float(0.42, 0.58),
+      cy: rng.float(0.22, 0.34),
+      rx: rng.float(0.16, 0.22),
+      ry: rng.float(0.1, 0.16),
+      strength: 0.34,
+      asLandPart: false
+    },
+    {
+      id: "fallback-south",
+      cx: rng.float(0.4, 0.6),
+      cy: rng.float(0.68, 0.78),
+      rx: rng.float(0.14, 0.22),
+      ry: rng.float(0.1, 0.16),
+      strength: 0.3,
+      asLandPart: false
+    }
+  ];
+  return [createLandPolygon(blob, config, supportBlobs)];
 }
 
 function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
@@ -169,7 +234,7 @@ function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
         strength: 0.98,
         asLandPart: true
       },
-      ...createSatelliteBlobs(rng, 4, true)
+      ...createSatelliteBlobs(rng, 4, false)
     ];
   }
 
@@ -201,7 +266,7 @@ function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
       strength: 0.38,
       asLandPart: false
     },
-    ...createSatelliteBlobs(rng, 3, true)
+    ...createSatelliteBlobs(rng, 3, false)
   ];
 }
 

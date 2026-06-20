@@ -1,7 +1,9 @@
 import {
   SOLDIER_REVIVE_MS,
   SOLDIER_SPEED,
-  ATTACK_SOLDIER_SPEED
+  ATTACK_SOLDIER_SPEED,
+  SOLDIER_MOVEMENT_MAX_DELTA_MS,
+  SOLDIER_MOVEMENT_STEP_MS
 } from "../constants";
 import type { GameState, Soldier } from "../types";
 import {
@@ -15,7 +17,9 @@ import { getSpawnProvince, randomPointInProvince } from "./provinces";
 import { createSoldier, getCountry, getCountryPopulationCount } from "./state";
 
 export function updateSoldiers(state: GameState, deltaMs: number): void {
-  const deltaSeconds = deltaMs / 1000;
+  const movementMs = Math.min(deltaMs, SOLDIER_MOVEMENT_MAX_DELTA_MS);
+  const steps = Math.max(1, Math.ceil(movementMs / SOLDIER_MOVEMENT_STEP_MS));
+  const stepSeconds = movementMs / steps / 1000;
 
   for (const soldier of state.soldiers) {
     if (!soldier.alive || soldier.status === "fighting") {
@@ -27,30 +31,32 @@ export function updateSoldiers(state: GameState, deltaMs: number): void {
       continue;
     }
 
-    const speed =
-      soldier.status === "attacking" || soldier.status === "returning"
-        ? ATTACK_SOLDIER_SPEED
-        : SOLDIER_SPEED;
-    const moved = moveToward(
-      { x: soldier.x, y: soldier.y },
-      soldier.target,
-      speed * deltaSeconds
-    );
+    for (let step = 0; step < steps; step += 1) {
+      const speed =
+        soldier.status === "attacking" || soldier.status === "returning"
+          ? ATTACK_SOLDIER_SPEED
+          : SOLDIER_SPEED;
+      const moved = moveToward(
+        { x: soldier.x, y: soldier.y },
+        soldier.target,
+        speed * stepSeconds
+      );
 
-    const nextPoint =
-      soldier.status === "wandering"
-        ? clampPointToPolygon(moved.point, country.polygon)
-        : moved.point;
-    soldier.x = nextPoint.x;
-    soldier.y = nextPoint.y;
+      const nextPoint =
+        soldier.status === "wandering"
+          ? clampPointToPolygon(moved.point, country.polygon)
+          : moved.point;
+      soldier.x = nextPoint.x;
+      soldier.y = nextPoint.y;
 
-    if (moved.arrived && soldier.status === "wandering") {
-      soldier.target = randomBorderPatrolPoint(country, soldier);
-    }
+      if (moved.arrived && soldier.status === "wandering") {
+        soldier.target = randomBorderPatrolPoint(country, soldier);
+      }
 
-    if (moved.arrived && soldier.status === "returning") {
-      soldier.status = "wandering";
-      soldier.target = randomBorderPatrolPoint(country, soldier);
+      if (moved.arrived && soldier.status === "returning") {
+        soldier.status = "wandering";
+        soldier.target = randomBorderPatrolPoint(country, soldier);
+      }
     }
   }
 }

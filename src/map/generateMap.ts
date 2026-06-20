@@ -43,6 +43,10 @@ type GeneratedMap = {
   minArea: number;
 };
 
+type MapGenerationOptions = {
+  relaxedAreaCheck?: boolean;
+};
+
 export function generateMap(
   width = MAP_WIDTH,
   height = MAP_HEIGHT,
@@ -83,9 +87,41 @@ export function generateMap(
     };
   }
 
-  const region = createRegion(width, height, effectiveEditableMapData);
+  const fallbackEditableMapData =
+    effectiveEditableMapData.generationConfig
+      ? createFantasyEditableMapData({
+          ...effectiveEditableMapData.generationConfig,
+          worldType: "continent",
+          seed: `${seed}:fallback-continent`,
+          seaLevel: Math.min(0.5, effectiveEditableMapData.generationConfig.seaLevel),
+          mountainStrength: Math.min(0.72, effectiveEditableMapData.generationConfig.mountainStrength),
+          moisture: Math.max(0.46, effectiveEditableMapData.generationConfig.moisture)
+        })
+      : effectiveEditableMapData;
+  const region = createRegion(width, height, fallbackEditableMapData);
+  for (let attempt = 0; attempt < MAP_GENERATION_MAX_ATTEMPTS; attempt += 1) {
+    const generated = generateMapOnce(
+      width,
+      height,
+      region,
+      createSeededRandom(`${seed}:fallback:${attempt}`)
+    );
+    if (generated.countries.length === COUNTRY_COUNT) {
+      return {
+        countries: generated.countries,
+        region
+      };
+    }
+  }
+
   return {
-    countries: generateMapOnce(width, height, region, createSeededRandom(`${seed}:fallback`)).countries,
+    countries: generateMapOnce(
+      width,
+      height,
+      region,
+      createSeededRandom(`${seed}:last-resort`),
+      { relaxedAreaCheck: true }
+    ).countries,
     region
   };
 }
@@ -104,8 +140,10 @@ function generateMapOnce(
   width: number,
   height: number,
   region: MapRegion,
-  rng: SeededRandom
+  rng: SeededRandom,
+  options: MapGenerationOptions = {}
 ): GeneratedMap {
+  const targetMinArea = getTargetMinArea(region);
   const points = createRegionPoints(region, rng);
   const delaunay = Delaunay.from<SeedPoint>(
     points,
@@ -134,7 +172,7 @@ function generateMapOnce(
     }
 
     const area = polygonArea(polygon);
-    if (area < 12) {
+    if (!options.relaxedAreaCheck && area < getEarlyRejectMinArea(region, targetMinArea)) {
       return {
         countries: [],
         minArea: 0
@@ -562,9 +600,17 @@ function getTargetMinArea(region: MapRegion): number {
     0
   );
   if (region.id === "fantasy") {
-    return Math.min(260, (landArea * 0.08) / COUNTRY_COUNT);
+    return Math.max(220, Math.min(420, (landArea * 0.28) / COUNTRY_COUNT));
   }
   return Math.min(MIN_COUNTRY_AREA, (landArea * 0.2) / COUNTRY_COUNT);
+}
+
+function getEarlyRejectMinArea(region: MapRegion, targetMinArea: number): number {
+  if (region.id === "fantasy") {
+    return Math.max(24, targetMinArea * 0.35);
+  }
+
+  return Math.max(12, targetMinArea * 0.72);
 }
 
 function sanitizePolygon(
