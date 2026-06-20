@@ -142,6 +142,9 @@ export type AttackTask = {
   id: string;
   sourceTaskId?: string;
   kind: "attack" | "counter";
+  counterControllerCountryId?: number;
+  counterTargetControllerCountryId?: number;
+  counterRootTargetCountryId?: number;
   targetCountryId: number;
   participantCountryIds: number[];
   conquerorCountryId: number;
@@ -241,6 +244,9 @@ export type SerializableGameState = {
     id: string;
     sourceTaskId?: string;
     kind: AttackTask["kind"];
+    counterControllerCountryId?: number;
+    counterTargetControllerCountryId?: number;
+    counterRootTargetCountryId?: number;
     targetCountryId: number;
     participantCountryIds: number[];
     conquerorCountryId: number;

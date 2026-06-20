@@ -35,6 +35,13 @@ export function startAttack(
   const uniqueParticipantIds = [...new Set(participantCountryIds)].filter(
     (countryId) => countryId !== targetCountryId
   );
+  const counterMetadata = createCounterMetadata(
+    state,
+    kind,
+    uniqueParticipantIds,
+    targetCountry,
+    sourceTaskId
+  );
   const attackers = uniqueParticipantIds.flatMap((countryId) =>
     selectAttackersFromCountry(state, countryId, targetCountry)
   );
@@ -53,6 +60,7 @@ export function startAttack(
       id: createAttackId(kind),
       sourceTaskId,
       kind,
+      ...counterMetadata,
       targetCountryId,
       participantCountryIds: uniqueParticipantIds,
       conquerorCountryId: getNearestParticipantControllerCountryId(
@@ -96,6 +104,7 @@ export function startAttack(
       existingAttack.participantCountryIds,
       existingAttack.targetCountryId
     );
+    Object.assign(existingAttack, counterMetadata);
 
     if (kind === "attack") {
       ensureCounterAttackTask(state, existingAttack, now);
@@ -108,6 +117,7 @@ export function startAttack(
     id: createAttackId(kind),
     sourceTaskId,
     kind,
+    ...counterMetadata,
     targetCountryId,
     participantCountryIds: activeParticipantIds,
     conquerorCountryId,
@@ -124,6 +134,35 @@ export function startAttack(
   }
 
   return attack;
+}
+
+function createCounterMetadata(
+  state: GameState,
+  kind: AttackKind,
+  participantCountryIds: number[],
+  targetCountry: Country,
+  sourceTaskId?: string
+): Pick<
+  AttackTask,
+  "counterControllerCountryId" | "counterTargetControllerCountryId" | "counterRootTargetCountryId"
+> {
+  if (kind !== "counter") {
+    return {};
+  }
+
+  const sourceAttack = sourceTaskId
+    ? state.activeAttacks.find((attack) => attack.id === sourceTaskId)
+    : undefined;
+
+  return {
+    counterControllerCountryId: getNearestParticipantControllerCountryId(
+      state,
+      participantCountryIds,
+      targetCountry.id
+    ),
+    counterTargetControllerCountryId: targetCountry.controllerCountryId,
+    counterRootTargetCountryId: sourceAttack?.targetCountryId
+  };
 }
 
 export function updateBattle(state: GameState, now: number): void {
@@ -145,28 +184,56 @@ export function updateBattle(state: GameState, now: number): void {
 export function hasAttackAgainstTarget(
   state: GameState,
   targetCountryId: number,
-  participantCountryIds?: number[]
+  participantCountryIds?: number[],
+  controllerCountryId?: number | null
 ): boolean {
   return state.activeAttacks.some(
-    (attack) =>
-      attack.kind === "attack" &&
-      attack.targetCountryId === targetCountryId &&
-      (!participantCountryIds ||
-        attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
+    (attack) => {
+      if (
+        attack.kind === "attack" &&
+        attack.targetCountryId === targetCountryId &&
+        (!participantCountryIds ||
+          attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
+      ) {
+        return true;
+      }
+
+      return (
+        attack.kind === "counter" &&
+        attack.counterRootTargetCountryId === targetCountryId &&
+        (controllerCountryId === undefined ||
+          controllerCountryId === null ||
+          attack.counterTargetControllerCountryId === controllerCountryId)
+      );
+    }
   );
 }
 
 export function stopAttack(
   state: GameState,
   targetCountryId: number,
-  participantCountryIds?: number[]
+  participantCountryIds?: number[],
+  controllerCountryId?: number | null
 ): boolean {
   const attacks = state.activeAttacks.filter(
-    (attack) =>
-      attack.kind === "attack" &&
-      attack.targetCountryId === targetCountryId &&
-      (!participantCountryIds ||
-        attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
+    (attack) => {
+      if (
+        attack.kind === "attack" &&
+        attack.targetCountryId === targetCountryId &&
+        (!participantCountryIds ||
+          attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
+      ) {
+        return true;
+      }
+
+      return (
+        attack.kind === "counter" &&
+        attack.counterRootTargetCountryId === targetCountryId &&
+        (controllerCountryId === undefined ||
+          controllerCountryId === null ||
+          attack.counterTargetControllerCountryId === controllerCountryId)
+      );
+    }
   );
   if (attacks.length === 0) {
     return false;
@@ -231,7 +298,134 @@ export function removeAttackParticipant(
   return stopped ? "stopped" : "continued";
 }
 
+function retargetCounterAttackIfNeeded(
+  state: GameState,
+  attack: AttackTask,
+  now: number
+): boolean {
+  const counterControllerCountryId = attack.counterControllerCountryId ?? attack.conquerorCountryId;
+  const targetControllerCountryId = attack.counterTargetControllerCountryId;
+  if (!targetControllerCountryId) {
+    return true;
+  }
+
+  const currentTarget = getCountry(state, attack.targetCountryId);
+  if (
+    currentTarget &&
+    currentTarget.controllerCountryId === targetControllerCountryId &&
+    syncCounterParticipantsForTarget(state, attack, currentTarget, counterControllerCountryId)
+  ) {
+    attack.conquerorCountryId = counterControllerCountryId;
+    return true;
+  }
+
+  const nextTarget = findNextCounterTargetCountry(
+    state,
+    counterControllerCountryId,
+    targetControllerCountryId
+  );
+  if (!nextTarget) {
+    return false;
+  }
+
+  attack.sourceTaskId = undefined;
+  attack.targetCountryId = nextTarget.id;
+  attack.conquerorCountryId = counterControllerCountryId;
+  attack.phase = "moving";
+  attack.lastBattleAt = now;
+
+  if (!syncCounterParticipantsForTarget(state, attack, nextTarget, counterControllerCountryId)) {
+    return false;
+  }
+
+  retargetAttackers(state, attack);
+  return true;
+}
+
+function syncCounterParticipantsForTarget(
+  state: GameState,
+  attack: AttackTask,
+  targetCountry: Country,
+  counterControllerCountryId: number
+): boolean {
+  const reachableSourceIds = state.countries
+    .filter(
+      (country) =>
+        country.id !== targetCountry.id &&
+        country.controllerCountryId === counterControllerCountryId &&
+        canAttackCountry(state, country, targetCountry)
+    )
+    .map((country) => country.id);
+
+  if (reachableSourceIds.length === 0) {
+    return false;
+  }
+
+  attack.participantCountryIds = [...new Set([...attack.participantCountryIds, ...reachableSourceIds])]
+    .filter((countryId) => reachableSourceIds.includes(countryId));
+  attack.attackerSoldierIds = attack.attackerSoldierIds.filter((soldierId) => {
+    const countryId =
+      state.soldiers.find((candidate) => candidate.id === soldierId)?.countryId ??
+      state.deadSoldiers.find((dead) => dead.soldier.id === soldierId)?.soldier.countryId;
+    const country = countryId ? getCountry(state, countryId) : undefined;
+    return Boolean(country && attack.participantCountryIds.includes(country.id));
+  });
+
+  return true;
+}
+
+function findNextCounterTargetCountry(
+  state: GameState,
+  counterControllerCountryId: number,
+  targetControllerCountryId: number
+): Country | undefined {
+  const sourceCountries = state.countries.filter(
+    (country) => country.controllerCountryId === counterControllerCountryId
+  );
+  const candidates = state.countries.filter(
+    (country) =>
+      country.controllerCountryId === targetControllerCountryId &&
+      sourceCountries.some((sourceCountry) => canAttackCountry(state, sourceCountry, country))
+  );
+
+  return candidates.sort(
+    (left, right) =>
+      getNearestDistanceFromSources(sourceCountries, left) -
+      getNearestDistanceFromSources(sourceCountries, right)
+  )[0];
+}
+
+function getNearestDistanceFromSources(sourceCountries: Country[], targetCountry: Country): number {
+  return sourceCountries.reduce(
+    (bestDistance, sourceCountry) =>
+      Math.min(bestDistance, distance(sourceCountry.center, targetCountry.center)),
+    Number.POSITIVE_INFINITY
+  );
+}
+
+function retargetAttackers(state: GameState, attack: AttackTask): void {
+  const attackerIds = new Set(attack.attackerSoldierIds);
+  for (const soldier of state.soldiers) {
+    if (!attackerIds.has(soldier.id)) {
+      continue;
+    }
+
+    soldier.status = "attacking";
+    soldier.target = getNextPaintTarget(
+      state,
+      attack.targetCountryId,
+      attack.conquerorCountryId,
+      soldier
+    );
+  }
+}
+
 function updateAttackTask(state: GameState, attack: AttackTask, now: number): void {
+  if (attack.kind === "counter" && !retargetCounterAttackIfNeeded(state, attack, now)) {
+    removeAttackTask(state, attack, true);
+    return;
+  }
+
   const targetCountry = getCountry(state, attack.targetCountryId);
   if (!targetCountry) {
     removeAttackTask(state, attack, true);
@@ -374,11 +568,21 @@ function annexTarget(state: GameState, attack: AttackTask): void {
   const ownerText = targetCountry.owner === "player" ? "玩家" : `${attack.conquerorCountryId} 号`;
   state.message = `${targetCountry.id} 号国家已被${ownerText}吞并`;
 
+  normalizeCountryPaint(targetCountry);
+
+  if (attack.kind === "counter" && retargetCounterAttackIfNeeded(state, attack, performance.now())) {
+    const excludedAttackIds = new Set([attack.id]);
+    cancelAttacksForCountry(state, targetCountry.id, excludedAttackIds);
+    cleanupOrphanCounters(state);
+    joinOngoingAttacksFromNewCountry(state, targetCountry, attack.conquerorCountryId);
+    recruitAttackersForTask(state, attack);
+    return;
+  }
+
   removeAttackTask(state, attack, false);
   stopCounterAttacksFor(state, attack.id);
   cancelAttacksForCountry(state, targetCountry.id);
   cleanupOrphanCounters(state);
-  normalizeCountryPaint(targetCountry);
   joinOngoingAttacksFromNewCountry(state, targetCountry, attack.conquerorCountryId);
 }
 
@@ -738,18 +942,33 @@ function removeAttackTask(
   state.activeAttacks = state.activeAttacks.filter((candidate) => candidate.id !== attack.id);
 }
 
-function stopCounterAttacksFor(state: GameState, sourceTaskId: string): void {
+function stopCounterAttacksFor(
+  state: GameState,
+  sourceTaskId: string,
+  excludedAttackIds = new Set<string>()
+): void {
   for (const counter of state.activeAttacks.filter((attack) => attack.sourceTaskId === sourceTaskId)) {
+    if (excludedAttackIds.has(counter.id)) {
+      continue;
+    }
     removeAttackTask(state, counter, true);
   }
 }
 
-export function cancelAttacksForCountry(state: GameState, countryId: number): void {
+export function cancelAttacksForCountry(
+  state: GameState,
+  countryId: number,
+  excludedAttackIds = new Set<string>()
+): void {
   for (const attack of [...state.activeAttacks]) {
+    if (excludedAttackIds.has(attack.id)) {
+      continue;
+    }
+
     if (attack.targetCountryId === countryId || attack.participantCountryIds.includes(countryId)) {
       removeAttackTask(state, attack, true);
       if (attack.kind === "attack") {
-        stopCounterAttacksFor(state, attack.id);
+        stopCounterAttacksFor(state, attack.id, excludedAttackIds);
       }
     }
   }

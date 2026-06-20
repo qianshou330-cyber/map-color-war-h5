@@ -233,11 +233,11 @@ function truceCountry(
   }
 
   const participantIds = getCommandParticipantIds(state, actor.countryIds);
-  if (!hasAttackAgainstTarget(state, targetCountry.id, participantIds)) {
+  if (!hasAttackAgainstTarget(state, targetCountry.id, participantIds, actor.factionId)) {
     return setMessage(state, "当前没有对该国家的进攻任务", false);
   }
 
-  stopAttack(state, targetCountry.id, participantIds);
+  stopAttack(state, targetCountry.id, participantIds, actor.factionId);
   return setMessage(state, `已停止进攻 ${targetCountry.displayCountryId} 号国家`);
 }
 
