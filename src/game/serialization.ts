@@ -20,6 +20,7 @@ export function createSerializableGameState(state: GameState): SerializableGameS
         countryIds: [...player.countryIds]
       })),
       allyCountryId: state.allyCountryId,
+      alliance: state.alliance ? { ...state.alliance } : null,
       pendingAllianceRequest: state.pendingAllianceRequest
         ? { ...state.pendingAllianceRequest }
         : null,

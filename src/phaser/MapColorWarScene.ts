@@ -694,11 +694,12 @@ export class MapColorWarScene extends Phaser.Scene {
   private handleResize(): void {
     const width = this.scale.width;
     const height = this.scale.height;
-    const zoom = Math.min(width / this.state.mapSize.width, height / this.state.mapSize.height);
-    const offsetX = (width - this.state.mapSize.width * zoom) / 2;
-    const offsetY = (height - this.state.mapSize.height * zoom) / 2;
+    const mapWidth = Math.max(1, this.state.mapSize.width);
+    const mapHeight = Math.max(1, this.state.mapSize.height);
+    const zoom = Math.min(width / mapWidth, height / mapHeight);
+    this.cameras.main.setViewport(0, 0, width, height);
     this.cameras.main.setZoom(zoom);
-    this.cameras.main.setScroll(-offsetX / zoom, -offsetY / zoom);
+    this.cameras.main.centerOn(mapWidth / 2, mapHeight / 2);
   }
 
   private getCurrentMapSize(): Size {

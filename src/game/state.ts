@@ -51,6 +51,7 @@ export function createGameState(
     playerCountryIds: [],
     networkPlayers: [],
     allyCountryId: null,
+    alliance: null,
     pendingAllianceRequest: null,
     activeAttacks: [],
     nextRebelFactionId: REBEL_FACTION_START_ID,

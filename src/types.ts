@@ -186,6 +186,7 @@ export type SerializableGameState = {
     countryIds: number[];
     networkPlayers: NetworkPlayer[];
     allyCountryId: number | null;
+    alliance: GameState["alliance"];
     pendingAllianceRequest: GameState["pendingAllianceRequest"];
     profile: PlayerProfile;
   };
@@ -291,6 +292,10 @@ export type GameState = {
   playerCountryIds: number[];
   networkPlayers: NetworkPlayer[];
   allyCountryId: number | null;
+  alliance: {
+    countryAId: number;
+    countryBId: number;
+  } | null;
   pendingAllianceRequest: {
     fromCountryId: number;
     toCountryId: number;

@@ -365,7 +365,8 @@ function getCountryActionHint(countryId: number): string {
     return "这是你的领土";
   }
 
-  if (currentState.allyCountryId === countryId) {
+  const alliancePartnerCountryId = getLocalAlliancePartnerCountryId(currentState);
+  if (alliancePartnerCountryId === countryId) {
     return "这是你的盟友";
   }
 
@@ -376,7 +377,7 @@ function getCountryActionHint(countryId: number): string {
 
   const sourceIds = [
     ...currentState.playerCountryIds,
-    ...(currentState.allyCountryId !== null ? [currentState.allyCountryId] : [])
+    ...(alliancePartnerCountryId !== null ? [alliancePartnerCountryId] : [])
   ];
   const canReach = sourceIds.some((sourceId) => {
     const sourceCountry = currentState.countries.find((country) => country.id === sourceId);
@@ -384,4 +385,35 @@ function getCountryActionHint(countryId: number): string {
   });
 
   return canReach ? `可输入 进攻${targetCountry.displayCountryId}` : "当前不可直接进攻";
+}
+
+function getLocalAlliancePartnerCountryId(currentState: GameState): number | null {
+  if (!currentState.alliance) {
+    return null;
+  }
+
+  const playerCountryIds = new Set(currentState.playerCountryIds);
+  if (playerCountryIds.has(currentState.alliance.countryAId)) {
+    return currentState.alliance.countryBId;
+  }
+  if (playerCountryIds.has(currentState.alliance.countryBId)) {
+    return currentState.alliance.countryAId;
+  }
+
+  const playerControllers = new Set(
+    currentState.playerCountryIds
+      .map((countryId) => currentState.countries[countryId - 1]?.controllerCountryId)
+      .filter((controllerCountryId): controllerCountryId is number => controllerCountryId !== undefined)
+  );
+  const countryA = currentState.countries[currentState.alliance.countryAId - 1];
+  const countryB = currentState.countries[currentState.alliance.countryBId - 1];
+
+  if (countryA && playerControllers.has(countryA.controllerCountryId)) {
+    return currentState.alliance.countryBId;
+  }
+  if (countryB && playerControllers.has(countryB.controllerCountryId)) {
+    return currentState.alliance.countryAId;
+  }
+
+  return null;
 }
