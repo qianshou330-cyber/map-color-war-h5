@@ -1,0 +1,27 @@
+{
+  "name": "map-color-war-h5",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc && tsc -p tsconfig.server.json --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "server:dev": "tsx watch server/index.ts",
+    "server:start": "tsx server/index.ts"
+  },
+  "dependencies": {
+    "d3-delaunay": "^6.0.4",
+    "phaser": "^3.90.0",
+    "polygon-clipping": "^0.15.7",
+    "tsx": "^4.22.4",
+    "vite": "^7.0.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/d3-delaunay": "^6.0.4",
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.3"
+  }
+}
