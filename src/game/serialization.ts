@@ -8,7 +8,8 @@ export function createSerializableGameState(state: GameState): SerializableGameS
     region: {
       id: state.region.id,
       name: state.region.name,
-      landPartIds: state.region.landParts.map((part) => part.id)
+      landPartIds: state.region.landParts.map((part) => part.id),
+      generationConfig: state.region.generationConfig
     },
     editableMapData: state.editableMapData,
     player: {

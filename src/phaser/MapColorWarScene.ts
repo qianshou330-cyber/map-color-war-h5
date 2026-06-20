@@ -5,7 +5,7 @@ import {
   PLAYER_STROKE_COLOR,
   SOLDIER_RADIUS
 } from "../constants";
-import type { AttackTask, Country, GameState, Point, Size, Soldier } from "../types";
+import type { AttackTask, Biome, Country, GameState, Point, Size, Soldier } from "../types";
 import { getAttackRoute } from "../game/attackRules";
 import { tickGame } from "../game/tick";
 import { getCountryColorById, getProvinceColor, getSoldierColor } from "../game/provinces";
@@ -47,6 +47,7 @@ type LabelGroup = {
 
 export class MapColorWarScene extends Phaser.Scene {
   private state: GameState;
+  private terrainGraphics!: Phaser.GameObjects.Graphics;
   private countryGraphics!: Phaser.GameObjects.Graphics;
   private routeGraphics!: Phaser.GameObjects.Graphics;
   private soldierGraphics!: Phaser.GameObjects.Graphics;
@@ -64,6 +65,7 @@ export class MapColorWarScene extends Phaser.Scene {
   private elapsedSinceHud = 0;
   private lastLabelRound = 0;
   private lastLabelSignature = "";
+  private lastTerrainSignature = "";
 
   constructor(
     state: GameState,
@@ -84,11 +86,13 @@ export class MapColorWarScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor(MAP_BACKGROUND_COLOR);
+    this.terrainGraphics = this.add.graphics();
     this.countryGraphics = this.add.graphics();
     this.routeGraphics = this.add.graphics();
     this.soldierGraphics = this.add.graphics();
     this.routeLabelLayer = this.add.container(0, 0);
     this.labelLayer = this.add.container(0, 0);
+    this.terrainGraphics.setDepth(0);
     this.countryGraphics.setDepth(1);
     this.routeGraphics.setDepth(3);
     this.soldierGraphics.setDepth(4);
@@ -97,6 +101,7 @@ export class MapColorWarScene extends Phaser.Scene {
     this.scale.on("resize", this.handleResize, this);
     this.input.on("pointerdown", this.handlePointerDown, this);
     this.handleResize();
+    this.drawTerrain();
     this.drawCountries();
     this.drawLabels();
     this.drawAttackRoutes(0);
@@ -109,6 +114,10 @@ export class MapColorWarScene extends Phaser.Scene {
     }
 
     const labelSignature = this.getLabelSignature();
+    const terrainSignature = this.getTerrainSignature();
+    if (this.lastTerrainSignature !== terrainSignature) {
+      this.drawTerrain();
+    }
     const labelGroupCount = this.getLabelGroups().length;
     if (
       this.lastLabelRound !== this.state.round ||
@@ -138,14 +147,77 @@ export class MapColorWarScene extends Phaser.Scene {
       this.drawCountry(country);
     }
 
+    this.drawRivers();
     this.drawRegionOutline();
   }
 
+  private drawTerrain(): void {
+    this.terrainGraphics.clear();
+    const terrain = this.state.region.terrain;
+    if (!terrain) {
+      this.lastTerrainSignature = this.getTerrainSignature();
+      return;
+    }
+
+    const cellWidth = this.state.mapSize.width / terrain.width;
+    const cellHeight = this.state.mapSize.height / terrain.height;
+    for (let row = 0; row < terrain.height; row += 1) {
+      for (let column = 0; column < terrain.width; column += 1) {
+        const index = row * terrain.width + column;
+        const biome = terrain.biomes[index] ?? "ocean";
+        this.terrainGraphics.fillStyle(this.getBiomeColor(biome), biome === "ocean" ? 0.82 : 0.88);
+        this.terrainGraphics.fillRect(
+          column * cellWidth,
+          row * cellHeight,
+          Math.ceil(cellWidth) + 0.5,
+          Math.ceil(cellHeight) + 0.5
+        );
+      }
+    }
+
+    this.lastTerrainSignature = this.getTerrainSignature();
+  }
+
   private drawRegionBase(): void {
+    if (this.state.region.terrain) {
+      return;
+    }
+
     this.countryGraphics.fillStyle(0x14253a, 0.42);
     for (const outline of this.state.region.outlinePolygons) {
       const regionPath = new Phaser.Geom.Polygon(outline);
       this.countryGraphics.fillPoints(regionPath.points, true);
+    }
+  }
+
+  private drawRivers(): void {
+    const rivers = this.state.region.rivers ?? [];
+    for (const river of rivers) {
+      if (river.points.length < 2) {
+        continue;
+      }
+
+      this.countryGraphics.lineStyle(4, 0x06101f, 0.32);
+      this.countryGraphics.beginPath();
+      river.points.forEach((point, index) => {
+        if (index === 0) {
+          this.countryGraphics.moveTo(point.x, point.y);
+        } else {
+          this.countryGraphics.lineTo(point.x, point.y);
+        }
+      });
+      this.countryGraphics.strokePath();
+
+      this.countryGraphics.lineStyle(1.7, 0x54d4ff, 0.62);
+      this.countryGraphics.beginPath();
+      river.points.forEach((point, index) => {
+        if (index === 0) {
+          this.countryGraphics.moveTo(point.x, point.y);
+        } else {
+          this.countryGraphics.lineTo(point.x, point.y);
+        }
+      });
+      this.countryGraphics.strokePath();
     }
   }
 
@@ -169,7 +241,7 @@ export class MapColorWarScene extends Phaser.Scene {
 
     for (const province of country.provinces) {
       const provincePath = new Phaser.Geom.Polygon(province.polygon);
-      this.countryGraphics.fillStyle(getProvinceColor(this.state, country, province), 0.98);
+      this.countryGraphics.fillStyle(getProvinceColor(this.state, country, province), 0.96);
       this.countryGraphics.fillPoints(provincePath.points, true);
       this.countryGraphics.lineStyle(0.55, 0xffffff, 0.18);
       this.countryGraphics.strokePoints(provincePath.points, true);
@@ -572,6 +644,41 @@ export class MapColorWarScene extends Phaser.Scene {
       width: Math.max(320, Math.round(this.scale.width)),
       height: Math.max(360, Math.round(this.scale.height))
     };
+  }
+
+  private getTerrainSignature(): string {
+    const config = this.state.region.generationConfig;
+    const terrain = this.state.region.terrain;
+    return [
+      this.state.round,
+      this.state.region.id,
+      config?.seed ?? "",
+      config?.worldType ?? "",
+      terrain?.width ?? 0,
+      terrain?.height ?? 0
+    ].join(":");
+  }
+
+  private getBiomeColor(biome: Biome): number {
+    switch (biome) {
+      case "coast":
+        return 0x4b9fb9;
+      case "plains":
+        return 0x6fa963;
+      case "forest":
+        return 0x31724f;
+      case "desert":
+        return 0xc9ad64;
+      case "wetland":
+        return 0x5ba486;
+      case "mountain":
+        return 0x8c8b82;
+      case "snow":
+        return 0xdce7ec;
+      case "ocean":
+      default:
+        return 0x0d2235;
+    }
   }
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {

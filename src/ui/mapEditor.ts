@@ -1,4 +1,9 @@
-import type { EditableMapData, Point } from "../types";
+import {
+  createDefaultMapGenerationConfig,
+  createFantasyEditableMapData,
+  normalizeMapGenerationConfig
+} from "../map/fantasy";
+import type { EditableMapData, FantasyWorldType, MapGenerationConfig, Point } from "../types";
 import { distance, polygonArea } from "../utils/geometry";
 
 const STORAGE_KEY = "map-color-war-h5:editable-map";
@@ -26,6 +31,14 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const canvas = requiredElement<HTMLCanvasElement>(root, ".map-editor-canvas");
   const status = requiredElement<HTMLDivElement>(root, ".map-editor-status");
   const textarea = requiredElement<HTMLTextAreaElement>(root, ".map-editor-json");
+  const seedInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='seed']");
+  const worldTypeInput = requiredElement<HTMLSelectElement>(root, "[data-gen-field='worldType']");
+  const seaLevelInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='seaLevel']");
+  const mountainInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='mountainStrength']");
+  const moistureInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='moisture']");
+  const riverCountInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='riverCount']");
+  const randomSeedButton = requiredElement<HTMLButtonElement>(root, "[data-action='random-seed']");
+  const fantasyPreviewButton = requiredElement<HTMLButtonElement>(root, "[data-action='fantasy-preview']");
   const undoButton = requiredElement<HTMLButtonElement>(root, "[data-action='undo']");
   const clearButton = requiredElement<HTMLButtonElement>(root, "[data-action='clear']");
   const saveButton = requiredElement<HTMLButtonElement>(root, "[data-action='save']");
@@ -37,6 +50,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const context = getCanvasContext(canvas);
 
   let landParts: Point[][] = [];
+  let currentGenerationConfig: MapGenerationConfig | undefined;
   let drawingPath: Point[] = [];
   let drawing = false;
   let canvasWidth = 1;
@@ -45,9 +59,12 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const savedMap = loadSavedEditableMap();
   if (savedMap) {
     landParts = savedMap.landParts.map((part) => part.polygon);
+    currentGenerationConfig = savedMap.generationConfig;
     textarea.value = JSON.stringify(savedMap, null, 2);
+    setGenerationForm(currentGenerationConfig ?? createDefaultMapGenerationConfig());
     setStatus("\u5df2\u8f7d\u5165\u672c\u673a\u4fdd\u5b58\u5730\u56fe");
   } else {
+    setGenerationForm(createDefaultMapGenerationConfig());
     setStatus("\u8bf7\u62d6\u52a8\u753b\u51fa\u5730\u56fe\u8f6e\u5ed3");
   }
 
@@ -58,6 +75,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   canvas.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
+    currentGenerationConfig = undefined;
     drawing = true;
     drawingPath = [eventToPoint(event)];
     redraw();
@@ -80,8 +98,23 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   canvas.addEventListener("pointerup", (event) => finishDrawing(event));
   canvas.addEventListener("pointercancel", (event) => finishDrawing(event));
 
+  randomSeedButton.addEventListener("click", () => {
+    seedInput.value = `fantasy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  });
+
+  fantasyPreviewButton.addEventListener("click", () => {
+    const data = createFantasyEditableMapData(readGenerationConfig());
+    currentGenerationConfig = data.generationConfig;
+    landParts = data.landParts.map((part) => part.polygon);
+    textarea.value = JSON.stringify(data, null, 2);
+    setGenerationForm(data.generationConfig ?? readGenerationConfig());
+    setStatus("\u5df2\u751f\u6210 Fantasy \u5730\u56fe\u9884\u89c8\uff0c\u53ef\u4fdd\u5b58\u6216\u76f4\u63a5\u751f\u6210\u5730\u56fe");
+    redraw();
+  });
+
   undoButton.addEventListener("click", () => {
     landParts.pop();
+    currentGenerationConfig = undefined;
     syncTextarea();
     setStatus(landParts.length ? "\u5df2\u64a4\u9500\u4e0a\u4e00\u5757\u9646\u5730" : "\u5730\u56fe\u5df2\u6e05\u7a7a");
     redraw();
@@ -89,6 +122,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
 
   clearButton.addEventListener("click", () => {
     landParts = [];
+    currentGenerationConfig = undefined;
     drawingPath = [];
     textarea.value = "";
     setStatus("\u5730\u56fe\u5df2\u6e05\u7a7a");
@@ -133,6 +167,8 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
     }
 
     landParts = imported.landParts.map((part) => part.polygon);
+    currentGenerationConfig = imported.generationConfig;
+    setGenerationForm(currentGenerationConfig ?? createDefaultMapGenerationConfig());
     textarea.value = JSON.stringify(imported, null, 2);
     setStatus("\u5df2\u5bfc\u5165\u5730\u56fe");
     redraw();
@@ -197,7 +233,10 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
       landParts: validParts.map((polygon, index) => ({
         id: `custom-${index + 1}`,
         polygon
-      }))
+      })),
+      ...(currentGenerationConfig
+        ? { generationConfig: normalizeMapGenerationConfig(currentGenerationConfig) }
+        : {})
     };
   }
 
@@ -221,7 +260,10 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
       landParts: validParts.map((polygon, index) => ({
         id: `custom-${index + 1}`,
         polygon
-      }))
+      })),
+      ...(currentGenerationConfig
+        ? { generationConfig: normalizeMapGenerationConfig(currentGenerationConfig) }
+        : {})
     };
   }
 
@@ -323,6 +365,26 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
     status.textContent = message;
   }
 
+  function readGenerationConfig(): MapGenerationConfig {
+    return normalizeMapGenerationConfig({
+      seed: seedInput.value.trim(),
+      worldType: worldTypeInput.value as FantasyWorldType,
+      seaLevel: Number(seaLevelInput.value),
+      mountainStrength: Number(mountainInput.value),
+      moisture: Number(moistureInput.value),
+      riverCount: Number(riverCountInput.value)
+    });
+  }
+
+  function setGenerationForm(config: MapGenerationConfig): void {
+    seedInput.value = config.seed;
+    worldTypeInput.value = config.worldType;
+    seaLevelInput.value = String(config.seaLevel);
+    mountainInput.value = String(config.mountainStrength);
+    moistureInput.value = String(config.moisture);
+    riverCountInput.value = String(config.riverCount);
+  }
+
   return {
     show() {
       root.hidden = false;
@@ -348,6 +410,43 @@ function editorMarkup(): string {
         <canvas class="map-editor-canvas"></canvas>
       </div>
       <div class="map-editor-panel">
+        <div class="map-editor-generator">
+          <div class="map-editor-generator-title">Fantasy 自动生成</div>
+          <div class="map-editor-generator-grid">
+            <label>
+              <span>Seed</span>
+              <input data-gen-field="seed" type="text" spellcheck="false" />
+            </label>
+            <label>
+              <span>大陆类型</span>
+              <select data-gen-field="worldType">
+                <option value="continent">大陆</option>
+                <option value="twinContinents">双大陆</option>
+                <option value="archipelago">群岛</option>
+              </select>
+            </label>
+            <label>
+              <span>海平面</span>
+              <input data-gen-field="seaLevel" type="range" min="0.35" max="0.6" step="0.01" />
+            </label>
+            <label>
+              <span>山脉</span>
+              <input data-gen-field="mountainStrength" type="range" min="0.15" max="1" step="0.01" />
+            </label>
+            <label>
+              <span>湿度</span>
+              <input data-gen-field="moisture" type="range" min="0.15" max="1" step="0.01" />
+            </label>
+            <label>
+              <span>河流</span>
+              <input data-gen-field="riverCount" type="number" min="0" max="20" step="1" />
+            </label>
+          </div>
+          <div class="map-editor-generator-actions">
+            <button type="button" data-action="random-seed">随机 Seed</button>
+            <button type="button" data-action="fantasy-preview">生成预览</button>
+          </div>
+        </div>
         <div class="map-editor-actions">
           <button type="button" data-action="undo">\u64a4\u9500</button>
           <button type="button" data-action="clear">\u6e05\u7a7a</button>
@@ -412,7 +511,10 @@ function parseEditableMapData(raw: string): EditableMapData | null {
     const data: EditableMapData = {
       version: 1,
       name: typeof value.name === "string" && value.name ? value.name : "\u81ea\u5b9a\u4e49\u5730\u56fe",
-      landParts
+      landParts,
+      ...(value.generationConfig
+        ? { generationConfig: normalizeMapGenerationConfig(value.generationConfig) }
+        : {})
     };
 
     const totalArea = data.landParts.reduce((sum, part) => sum + polygonArea(part.polygon), 0);

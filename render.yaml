@@ -14,3 +14,15 @@ services:
         value: "1280"
       - key: MAP_HEIGHT
         value: "720"
+      - key: MAP_GENERATION_SEED
+        value: room-1-fantasy
+      - key: MAP_GENERATION_WORLD_TYPE
+        value: continent
+      - key: MAP_GENERATION_SEA_LEVEL
+        value: "0.46"
+      - key: MAP_GENERATION_MOUNTAIN_STRENGTH
+        value: "0.62"
+      - key: MAP_GENERATION_MOISTURE
+        value: "0.56"
+      - key: MAP_GENERATION_RIVER_COUNT
+        value: "8"

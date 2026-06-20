@@ -212,8 +212,12 @@ export function clipPolygonToPolygonParts(subject: Point[], clip: Point[]): Poin
     return [];
   }
 
-  const clipped = polygonClipping.intersection(toClippingPolygon(subject), toClippingPolygon(clip));
-  return outerRings(clipped);
+  try {
+    const clipped = polygonClipping.intersection(toClippingPolygon(subject), toClippingPolygon(clip));
+    return outerRings(clipped);
+  } catch {
+    return [];
+  }
 }
 
 function toClippingPolygon(polygon: Point[]): ClippingPolygon {

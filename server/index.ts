@@ -7,9 +7,12 @@ import { executeCommand, parseCommand } from "../src/game/commands";
 import { createPlayerProfile, getDisplayNickname, setCustomNickname } from "../src/game/playerProfile";
 import { createGameState } from "../src/game/state";
 import { tickGame } from "../src/game/tick";
+import { createFantasyEditableMapData, normalizeMapGenerationConfig } from "../src/map/fantasy";
 import type {
   CommandContext,
   CommandResult,
+  EditableMapData,
+  FantasyWorldType,
   GameState,
   NetworkPlayer,
   PlayerProfile,
@@ -87,12 +90,32 @@ function createRoom(roomId: string): RoomState {
   const now = performance.now();
   return {
     roomId,
-    gameState: createGameState(1, now, MAP_SIZE),
+    gameState: createGameState(1, now, MAP_SIZE, createServerEditableMapData()),
     players: new Map(),
     sockets: new Map(),
     createdAt: now,
     lastTickAt: now
   };
+}
+
+function createServerEditableMapData(): EditableMapData {
+  const config = normalizeMapGenerationConfig({
+    seed: process.env.MAP_GENERATION_SEED ?? "room-1-fantasy",
+    worldType: parseWorldType(process.env.MAP_GENERATION_WORLD_TYPE),
+    seaLevel: Number(process.env.MAP_GENERATION_SEA_LEVEL ?? 0.46),
+    mountainStrength: Number(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH ?? 0.62),
+    moisture: Number(process.env.MAP_GENERATION_MOISTURE ?? 0.56),
+    riverCount: Number(process.env.MAP_GENERATION_RIVER_COUNT ?? 8)
+  });
+  return createFantasyEditableMapData(config);
+}
+
+function parseWorldType(value: string | undefined): FantasyWorldType {
+  if (value === "twinContinents" || value === "archipelago" || value === "continent") {
+    return value;
+  }
+
+  return "continent";
 }
 
 function handleRawMessage(roomState: RoomState, socket: WebSocket, raw: string): void {

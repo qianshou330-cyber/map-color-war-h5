@@ -1,4 +1,5 @@
 import type { EditableMapData, MapLandPart, MapRegion, Point } from "../types";
+import { createDefaultMapGenerationConfig, createFantasyRegion } from "./fantasy";
 
 type RegionTemplate = {
   id: "china";
@@ -157,7 +158,7 @@ const CHINA_TEMPLATE: RegionTemplate = {
 };
 
 export function createRandomRegion(width: number, height: number): MapRegion {
-  return scaleRegion(CHINA_TEMPLATE, width, height);
+  return createFantasyRegion(width, height, createDefaultMapGenerationConfig());
 }
 
 export function createRegionFromEditableMap(
@@ -165,6 +166,15 @@ export function createRegionFromEditableMap(
   height: number,
   data: EditableMapData
 ): MapRegion {
+  if (data.generationConfig) {
+    return createFantasyRegion(
+      width,
+      height,
+      data.generationConfig,
+      data.landParts.map((part) => part.polygon)
+    );
+  }
+
   const landParts: MapLandPart[] = data.landParts.map((part, index) => ({
     id: part.id || `custom-${index + 1}`,
     minSeeds: 1,

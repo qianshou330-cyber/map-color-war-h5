@@ -30,7 +30,8 @@ import {
   pointInPolygon,
   randomPointInPolygon
 } from "../utils/geometry";
-import { randomFloat, randomInt } from "../utils/random";
+import { createSeededRandom, type SeededRandom } from "../utils/seededRandom";
+import { createDefaultMapGenerationConfig, createFantasyEditableMapData } from "./fantasy";
 import { createRandomRegion, createRegionFromEditableMap } from "./regions";
 
 type SeedPoint = Point & {
@@ -49,10 +50,14 @@ export function generateMap(
 ): GeneratedMapResult {
   let bestMap: GeneratedMap | null = null;
   let bestRegion: MapRegion | null = null;
+  const effectiveEditableMapData =
+    editableMapData ?? createFantasyEditableMapData(createDefaultMapGenerationConfig());
+  const seed = effectiveEditableMapData.generationConfig?.seed ?? `${Date.now()}-${Math.random()}`;
 
   for (let attempt = 0; attempt < MAP_GENERATION_MAX_ATTEMPTS; attempt += 1) {
-    const region = createRegion(width, height, editableMapData);
-    const generated = generateMapOnce(width, height, region);
+    const region = createRegion(width, height, effectiveEditableMapData);
+    const rng = createSeededRandom(`${seed}:map:${attempt}`);
+    const generated = generateMapOnce(width, height, region, rng);
     const targetMinArea = getTargetMinArea(region);
 
     if (generated.countries.length === COUNTRY_COUNT && generated.minArea >= targetMinArea) {
@@ -78,9 +83,9 @@ export function generateMap(
     };
   }
 
-  const region = createRegion(width, height, editableMapData);
+  const region = createRegion(width, height, effectiveEditableMapData);
   return {
-    countries: generateMapOnce(width, height, region).countries,
+    countries: generateMapOnce(width, height, region, createSeededRandom(`${seed}:fallback`)).countries,
     region
   };
 }
@@ -95,8 +100,13 @@ function createRegion(
     : createRandomRegion(width, height);
 }
 
-function generateMapOnce(width: number, height: number, region: MapRegion): GeneratedMap {
-  const points = createRegionPoints(region);
+function generateMapOnce(
+  width: number,
+  height: number,
+  region: MapRegion,
+  rng: SeededRandom
+): GeneratedMap {
+  const points = createRegionPoints(region, rng);
   const delaunay = Delaunay.from<SeedPoint>(
     points,
     (point) => point.x,
@@ -147,12 +157,12 @@ function generateMapOnce(width: number, height: number, region: MapRegion): Gene
       owner: "neutral",
       controller: "computer",
       color: getCountryBaseColor(index),
-      defaultSoldierCap: randomInt(SOLDIER_CAP_MIN, SOLDIER_CAP_MAX),
+      defaultSoldierCap: rng.int(SOLDIER_CAP_MIN, SOLDIER_CAP_MAX),
       provinces: [],
       spawnProvinceId: ""
     };
 
-    country.provinces = createCountryProvinces(country);
+    country.provinces = createCountryProvinces(country, rng.fork(`provinces:${country.id}`));
     const spawnProvince = [...country.provinces].sort(
       (a, b) => distance(a.center, country.center) - distance(b.center, country.center)
     )[0];
@@ -183,8 +193,8 @@ function getCountryBaseColor(index: number): number {
   return NEUTRAL_COLORS[paletteIndex];
 }
 
-function createCountryProvinces(country: Country): Province[] {
-  const seeds = createProvinceSeeds(country);
+function createCountryProvinces(country: Country, rng: SeededRandom): Province[] {
+  const seeds = createProvinceSeeds(country, rng);
   const bounds = polygonBounds(country.polygon);
   const delaunay = Delaunay.from<Point>(
     seeds,
@@ -236,10 +246,10 @@ function createCountryProvinces(country: Country): Province[] {
     : createFallbackProvinces(country);
 }
 
-function createProvinceSeeds(country: Country): Point[] {
+function createProvinceSeeds(country: Country, rng: SeededRandom): Point[] {
   const seeds = [country.center];
   while (seeds.length < PROVINCES_PER_COUNTRY) {
-    seeds.push(randomPointInPolygon(country.polygon));
+    seeds.push(randomPointInPolygonWithRng(country.polygon, rng));
   }
   return seeds;
 }
@@ -304,17 +314,18 @@ function pointOnPolygonPerimeter(polygon: Point[], targetDistance: number): Poin
   return polygon[0];
 }
 
-function createRegionPoints(region: MapRegion): SeedPoint[] {
-  const allocations = allocateSeedCounts(region);
+function createRegionPoints(region: MapRegion, rng: SeededRandom): SeedPoint[] {
+  const allocations = allocateSeedCounts(region, rng.fork("allocation"));
   const points = allocations.flatMap(({ landPart, count }) =>
-    createPointsForLandPart(landPart, count)
+    createPointsForLandPart(landPart, count, rng.fork(landPart.id))
   );
 
-  return points.slice(0, COUNTRY_COUNT).sort(() => Math.random() - 0.5);
+  return shuffle(points.slice(0, COUNTRY_COUNT), rng.fork("shuffle"));
 }
 
 function allocateSeedCounts(
-  region: MapRegion
+  region: MapRegion,
+  rng: SeededRandom
 ): Array<{ landPart: MapLandPart; count: number }> {
   const areas = region.landParts.map((landPart) => ({
     landPart,
@@ -337,7 +348,7 @@ function allocateSeedCounts(
   );
 
   while (allocated < COUNTRY_COUNT) {
-    const pick = randomFloat(0, totalArea);
+    const pick = rng.float(0, totalArea);
     let cursor = 0;
     const selected =
       areas.find((item) => {
@@ -355,7 +366,11 @@ function allocateSeedCounts(
   }));
 }
 
-function createPointsForLandPart(landPart: MapLandPart, count: number): SeedPoint[] {
+function createPointsForLandPart(
+  landPart: MapLandPart,
+  count: number,
+  rng: SeededRandom
+): SeedPoint[] {
   if (count <= 0) {
     return [];
   }
@@ -378,7 +393,7 @@ function createPointsForLandPart(landPart: MapLandPart, count: number): SeedPoin
         minY: bounds.minY + row * cellHeight,
         maxX: bounds.minX + (column + 1) * cellWidth,
         maxY: bounds.minY + (row + 1) * cellHeight
-      }) ?? randomPointInPolygon(landPart.polygon);
+      }, rng) ?? randomPointInPolygonWithRng(landPart.polygon, rng);
 
     points.push({
       ...point,
@@ -391,12 +406,13 @@ function createPointsForLandPart(landPart: MapLandPart, count: number): SeedPoin
 
 function randomPointInLandPartCell(
   landPart: MapLandPart,
-  bounds: { minX: number; minY: number; maxX: number; maxY: number }
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  rng: SeededRandom
 ): Point | null {
   for (let attempt = 0; attempt < 28; attempt += 1) {
     const point = {
-      x: randomFloat(bounds.minX, bounds.maxX),
-      y: randomFloat(bounds.minY, bounds.maxY)
+      x: rng.float(bounds.minX, bounds.maxX),
+      y: rng.float(bounds.minY, bounds.maxY)
     };
 
     if (pointInPolygon(point, landPart.polygon)) {
@@ -405,6 +421,30 @@ function randomPointInLandPartCell(
   }
 
   return null;
+}
+
+function randomPointInPolygonWithRng(polygon: Point[], rng: SeededRandom): Point {
+  const bounds = polygonBounds(polygon);
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const point = {
+      x: rng.float(bounds.minX, bounds.maxX),
+      y: rng.float(bounds.minY, bounds.maxY)
+    };
+    if (pointInPolygon(point, polygon)) {
+      return point;
+    }
+  }
+
+  return randomPointInPolygon(polygon);
+}
+
+function shuffle<T>(items: T[], rng: SeededRandom): T[] {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = rng.int(0, index);
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
 }
 
 function clipCellToRegionPart(cell: Point[], landPart: MapLandPart, seed: Point): Point[] {
@@ -521,6 +561,9 @@ function getTargetMinArea(region: MapRegion): number {
     (total, landPart) => total + polygonArea(landPart.polygon),
     0
   );
+  if (region.id === "fantasy") {
+    return Math.min(260, (landArea * 0.08) / COUNTRY_COUNT);
+  }
   return Math.min(MIN_COUNTRY_AREA, (landArea * 0.2) / COUNTRY_COUNT);
 }
 

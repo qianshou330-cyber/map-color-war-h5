@@ -10,7 +10,54 @@ export type Size = {
   height: number;
 };
 
-export type MapRegionId = "china" | "custom";
+export type MapRegionId = "china" | "custom" | "fantasy";
+
+export type FantasyWorldType = "continent" | "twinContinents" | "archipelago";
+
+export type Biome =
+  | "ocean"
+  | "coast"
+  | "plains"
+  | "forest"
+  | "desert"
+  | "wetland"
+  | "mountain"
+  | "snow";
+
+export type MapGenerationConfig = {
+  seed: string;
+  worldType: FantasyWorldType;
+  seaLevel: number;
+  mountainStrength: number;
+  moisture: number;
+  riverCount: number;
+  countryCount: number;
+  provincesPerCountry: number;
+};
+
+export type TerrainCell = {
+  x: number;
+  y: number;
+  height: number;
+  moisture: number;
+  temperature: number;
+  biome: Biome;
+  isWater: boolean;
+};
+
+export type TerrainMap = {
+  width: number;
+  height: number;
+  heights: number[];
+  moisture: number[];
+  temperature: number[];
+  biomes: Biome[];
+};
+
+export type River = {
+  id: string;
+  points: Point[];
+};
 
 export type EditableMapLandPart = {
   id: string;
@@ -21,6 +68,7 @@ export type EditableMapData = {
   version: 1;
   name: string;
   landParts: EditableMapLandPart[];
+  generationConfig?: MapGenerationConfig;
 };
 
 export type MapLandPart = {
@@ -34,6 +82,9 @@ export type MapRegion = {
   name: string;
   landParts: MapLandPart[];
   outlinePolygons: Point[][];
+  generationConfig?: MapGenerationConfig;
+  terrain?: TerrainMap;
+  rivers?: River[];
 };
 
 export type GeneratedMapResult = {
@@ -127,6 +178,7 @@ export type SerializableGameState = {
     id: MapRegionId;
     name: string;
     landPartIds: string[];
+    generationConfig?: MapGenerationConfig;
   };
   editableMapData?: EditableMapData;
   player: {
