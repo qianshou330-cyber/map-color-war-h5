@@ -11,9 +11,9 @@ services:
       - key: NODE_VERSION
         value: 24.16.0
       - key: MAP_WIDTH
-        value: "1280"
+        value: "800"
       - key: MAP_HEIGHT
-        value: "720"
+        value: "640"
       - key: MAP_GENERATION_SEED
         value: room-1-fantasy
       - key: MAP_GENERATION_WORLD_TYPE

@@ -2,7 +2,7 @@ import type { CommandLogEntry, GameState } from "../types";
 import { getDisplayNickname } from "../game/playerProfile";
 
 const MAX_DESKTOP_ROWS = 8;
-const MAX_MOBILE_ROWS = 3;
+const MAX_MOBILE_ROWS = 2;
 
 export function renderCommandChat(
   root: HTMLElement,

@@ -368,6 +368,8 @@ body {
 
 #game-root canvas {
   display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 #hud-root {
@@ -620,7 +622,7 @@ body {
 @media (max-width: 860px) {
   #game-root {
     top: 44px;
-    bottom: 160px;
+    bottom: 148px;
   }
 
   #hud-root {
@@ -648,10 +650,10 @@ body {
 
   #command-form {
     grid-template-columns: 1fr 78px;
-    grid-template-rows: 40px 22px 30px 48px;
-    height: 160px;
-    padding: 8px 10px;
-    gap: 6px 10px;
+    grid-template-rows: 32px 20px 26px 44px;
+    height: 148px;
+    padding: 5px 10px;
+    gap: 5px 10px;
   }
 
   #command-form.is-admin {
@@ -660,18 +662,22 @@ body {
 
   #command-message {
     font-size: 13px;
-    line-height: 22px;
+    line-height: 20px;
   }
 
   #command-chat {
-    padding: 4px 6px;
-    font-size: 11px;
-    line-height: 1.25;
+    padding: 2px 6px;
+    font-size: 10.5px;
+    line-height: 1.15;
     pointer-events: none;
   }
 
   .command-chat-entry {
-    padding: 1px 3px;
+    padding: 0 3px;
+  }
+
+  .command-chat-empty {
+    line-height: 26px;
   }
 
   .command-chat-system {
@@ -679,9 +685,14 @@ body {
   }
 
   #command-form #command-shortcuts button {
-    height: 30px;
+    height: 26px;
     padding: 0 9px;
     font-size: 12px;
+  }
+
+  #command-input,
+  #command-form button {
+    height: 44px;
   }
 
   .map-editor {
@@ -734,13 +745,15 @@ body {
 
 @media (pointer: coarse) {
   #game-root {
-    bottom: 130px;
+    bottom: calc(112px + env(safe-area-inset-bottom));
   }
 
   #command-form {
     grid-template-columns: 1fr;
-    grid-template-rows: 42px 22px 48px;
-    height: 130px;
+    grid-template-rows: 28px 18px 46px;
+    height: calc(112px + env(safe-area-inset-bottom));
+    padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
+    gap: 4px;
   }
 
   #command-form.is-admin {
@@ -753,7 +766,22 @@ body {
   }
 
   #command-input {
+    height: 46px;
     font-size: 16px;
+  }
+
+  #command-message {
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  #command-chat {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .command-chat-empty {
+    line-height: 24px;
   }
 }
 

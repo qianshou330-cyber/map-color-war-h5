@@ -1,6 +1,8 @@
 import Phaser from "phaser";
 import {
   MAP_BACKGROUND_COLOR,
+  MOBILE_MAP_HEIGHT,
+  MOBILE_MAP_WIDTH,
   NEUTRAL_STROKE_COLOR,
   PLAYER_STROKE_COLOR,
   SOLDIER_RADIUS,
@@ -694,15 +696,78 @@ export class MapColorWarScene extends Phaser.Scene {
   private handleResize(): void {
     const width = this.scale.width;
     const height = this.scale.height;
-    const mapWidth = Math.max(1, this.state.mapSize.width);
-    const mapHeight = Math.max(1, this.state.mapSize.height);
-    const zoom = Math.min(width / mapWidth, height / mapHeight);
+    const cameraBounds = this.commandOnlyMode
+      ? this.getPlayableCameraBounds()
+      : {
+          x: 0,
+          y: 0,
+          width: Math.max(1, this.state.mapSize.width),
+          height: Math.max(1, this.state.mapSize.height)
+        };
+    const zoom = Math.min(width / cameraBounds.width, height / cameraBounds.height);
     this.cameras.main.setViewport(0, 0, width, height);
     this.cameras.main.setZoom(zoom);
-    this.cameras.main.centerOn(mapWidth / 2, mapHeight / 2);
+    this.cameras.main.centerOn(
+      cameraBounds.x + cameraBounds.width / 2,
+      cameraBounds.y + cameraBounds.height / 2
+    );
+  }
+
+  private getPlayableCameraBounds(): { x: number; y: number; width: number; height: number } {
+    if (this.state.countries.length === 0) {
+      return {
+        x: 0,
+        y: 0,
+        width: Math.max(1, this.state.mapSize.width),
+        height: Math.max(1, this.state.mapSize.height)
+      };
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const country of this.state.countries) {
+      for (const point of country.polygon) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return {
+        x: 0,
+        y: 0,
+        width: Math.max(1, this.state.mapSize.width),
+        height: Math.max(1, this.state.mapSize.height)
+      };
+    }
+
+    const padding = 28;
+    const x = Math.max(0, minX - padding);
+    const y = Math.max(0, minY - padding);
+    const right = Math.min(this.state.mapSize.width, maxX + padding);
+    const bottom = Math.min(this.state.mapSize.height, maxY + padding);
+
+    return {
+      x,
+      y,
+      width: Math.max(1, right - x),
+      height: Math.max(1, bottom - y)
+    };
   }
 
   private getCurrentMapSize(): Size {
+    if (this.commandOnlyMode) {
+      return {
+        width: MOBILE_MAP_WIDTH,
+        height: MOBILE_MAP_HEIGHT
+      };
+    }
+
     return {
       width: Math.max(320, Math.round(this.scale.width)),
       height: Math.max(360, Math.round(this.scale.height))

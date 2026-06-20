@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import "./style.css";
-import { MAP_HEIGHT, MAP_WIDTH } from "./constants";
+import { MAP_HEIGHT, MAP_WIDTH, MOBILE_MAP_HEIGHT, MOBILE_MAP_WIDTH } from "./constants";
 import {
   createPlayerProfile,
   getDisplayNickname,
@@ -136,7 +136,8 @@ function startGame(
   commandForm.hidden = false;
 
   setCustomNickname(playerProfile, setupData.nickname);
-  const initialMapSize = measureGameRoot(gameRoot);
+  const initialViewportSize = measureGameRoot(gameRoot);
+  const initialMapSize = measureInitialMapSize(gameRoot);
   state = createGameState(1, performance.now(), initialMapSize, editableMapData, playerProfile);
   state.message = networkMode
     ? "\u6b63\u5728\u8fde\u63a5\u7f51\u7edc\u5bf9\u6218..."
@@ -146,8 +147,8 @@ function startGame(
     type: Phaser.AUTO,
     parent: gameRoot,
     backgroundColor: "#0e1726",
-    width: initialMapSize.width,
-    height: initialMapSize.height,
+    width: initialViewportSize.width,
+    height: initialViewportSize.height,
     scale: {
       mode: Phaser.Scale.RESIZE,
       parent: gameRoot,
@@ -221,6 +222,17 @@ function measureGameRoot(element: HTMLElement) {
     width: Math.max(320, Math.round(rect.width || element.clientWidth || MAP_WIDTH)),
     height: Math.max(360, Math.round(rect.height || element.clientHeight || MAP_HEIGHT))
   };
+}
+
+function measureInitialMapSize(element: HTMLElement) {
+  if (commandOnlyMobileMode) {
+    return {
+      width: MOBILE_MAP_WIDTH,
+      height: MOBILE_MAP_HEIGHT
+    };
+  }
+
+  return measureGameRoot(element);
 }
 
 function requiredElement<T extends HTMLElement>(selector: string): T {
