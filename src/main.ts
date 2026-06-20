@@ -20,6 +20,7 @@ import type {
   PlayerSetupData
 } from "./types";
 import { bindCommandInput } from "./ui/commandInput";
+import { renderCommandChat } from "./ui/commandChat";
 import { renderCommandMessage } from "./ui/commandMessage";
 import { renderHud } from "./ui/hud";
 import { loadSavedEditableMap, mountMapEditor } from "./ui/mapEditor";
@@ -29,6 +30,7 @@ const gameRoot = requiredElement<HTMLDivElement>("#game-root");
 const editorRoot = requiredElement<HTMLDivElement>("#editor-root");
 const playerSetupRoot = requiredElement<HTMLDivElement>("#player-setup-root");
 const hudRoot = requiredElement<HTMLDivElement>("#hud-root");
+const commandChat = requiredElement<HTMLDivElement>("#command-chat");
 const commandMessage = requiredElement<HTMLDivElement>("#command-message");
 const commandForm = requiredElement<HTMLFormElement>("#command-form");
 const commandInput = requiredElement<HTMLInputElement>("#command-input");
@@ -36,6 +38,7 @@ const editMapButton = requiredElement<HTMLButtonElement>("#edit-map-button");
 const adminMode = isAdminMode();
 const networkMode = isNetworkModeEnabled();
 const webSocketUrl = getConfiguredWebSocketUrl();
+const commandOnlyMobileMode = isCommandOnlyMobileMode();
 
 commandForm.classList.toggle("is-admin", adminMode);
 
@@ -45,6 +48,7 @@ let networkClient: NetworkGameClient | null = null;
 let pendingEditableMapData: EditableMapData | undefined;
 let pendingPlayerProfile: PlayerProfile | null = null;
 let hasPendingSetup = false;
+let selfClientId: string | null = null;
 
 const render = () => {
   if (!state) {
@@ -52,6 +56,7 @@ const render = () => {
   }
 
   renderHud(hudRoot, state);
+  renderCommandChat(commandChat, state, selfClientId);
   renderCommandMessage(commandMessage, state);
 };
 
@@ -155,7 +160,8 @@ function startGame(
         render,
         handleCountrySelected,
         handleRouteSelected,
-        networkMode
+        networkMode,
+        commandOnlyMobileMode
       )
     ]
   });
@@ -184,7 +190,9 @@ function stopGame(): void {
 
   state = null;
   hudRoot.innerHTML = "";
+  commandChat.innerHTML = "";
   commandMessage.textContent = "";
+  selfClientId = null;
 }
 
 function showEditor(): void {
@@ -225,6 +233,10 @@ function requiredElement<T extends HTMLElement>(selector: string): T {
 
 function isAdminMode(): boolean {
   return new URLSearchParams(window.location.search).get("admin") === "1";
+}
+
+function isCommandOnlyMobileMode(): boolean {
+  return window.matchMedia("(pointer: coarse), (max-width: 860px)").matches;
 }
 
 function connectNetworkGame(playerProfile: PlayerProfile): void {
@@ -275,6 +287,7 @@ function applyAuthoritativeState(remoteState: GameState, self: NetworkPlayer | n
   Object.assign(state, remoteState);
 
   if (self) {
+    selfClientId = self.clientId;
     state.playerMainCountryId = self.mainCountryId;
     state.playerCountryIds = [...self.countryIds];
     state.playerProfile = {
@@ -293,8 +306,19 @@ function appendCommandLog(inputText: string, result: { ok: boolean; message: str
   }
 
   if (!networkMode) {
-    appendGameCommandLog(state, inputText, result);
+    appendGameCommandLog(state, inputText, result, performance.now(), {
+      nickname: getDisplayNickname(state.playerProfile),
+      factionId: getLocalPlayerFactionId(state)
+    });
   }
+}
+
+function getLocalPlayerFactionId(currentState: GameState): number | null {
+  if (!currentState.playerMainCountryId) {
+    return null;
+  }
+
+  return currentState.countries[currentState.playerMainCountryId - 1]?.controllerCountryId ?? null;
 }
 
 function handleCountrySelected(countryId: number, routeMessage?: string): void {

@@ -8,10 +8,12 @@ import { createPlayerProfile, getDisplayNickname, setCustomNickname } from "../s
 import { createGameState } from "../src/game/state";
 import { tickGame } from "../src/game/tick";
 import type {
+  CommandContext,
   CommandResult,
   GameState,
   NetworkPlayer,
-  PlayerProfile
+  PlayerProfile,
+  PlayerSession
 } from "../src/types";
 import {
   NETWORK_ROOM_ID,
@@ -27,8 +29,17 @@ const MAP_SIZE = {
   height: Number.parseInt(process.env.MAP_HEIGHT ?? `${MAP_HEIGHT}`, 10)
 };
 
-type ClientSession = NetworkPlayer & {
+type ServerPlayerSession = PlayerSession & {
   profile: PlayerProfile;
+};
+
+type RoomState = {
+  roomId: string;
+  gameState: GameState;
+  players: Map<string, ServerPlayerSession>;
+  sockets: Map<WebSocket, string>;
+  createdAt: number;
+  lastTickAt: number;
 };
 
 const httpServer = createServer((request, response) => {
@@ -43,40 +54,48 @@ const httpServer = createServer((request, response) => {
 });
 
 const wss = new WebSocketServer({ server: httpServer });
-const sessions = new Map<string, ClientSession>();
-const sockets = new Map<WebSocket, ClientSession>();
-const state = createGameState(1, performance.now(), MAP_SIZE);
-let lastTickAt = performance.now();
+const room = createRoom(NETWORK_ROOM_ID);
 
 wss.on("connection", (socket) => {
   socket.on("message", (raw) => {
-    handleRawMessage(socket, raw.toString());
+    handleRawMessage(room, socket, raw.toString());
   });
 
   socket.on("close", () => {
-    sockets.delete(socket);
+    handleSocketClose(room, socket);
   });
 });
 
 setInterval(() => {
   const now = performance.now();
-  const delta = now - lastTickAt;
-  lastTickAt = now;
-  applyUnionPlayerContext();
-  tickGame(state, delta, now, state.mapSize);
-  syncSessionsFromState();
-  syncNetworkPlayers();
+  const delta = now - room.lastTickAt;
+  room.lastTickAt = now;
+  syncNetworkPlayers(room);
+  tickGame(room.gameState, delta, now, room.gameState.mapSize);
+  syncNetworkPlayers(room);
 }, SERVER_TICK_MS);
 
 setInterval(() => {
-  broadcastState();
+  broadcastState(room);
 }, BROADCAST_MS);
 
 httpServer.listen(PORT, () => {
   console.log(`map-color-war-h5 websocket server listening on :${PORT}`);
 });
 
-function handleRawMessage(socket: WebSocket, raw: string): void {
+function createRoom(roomId: string): RoomState {
+  const now = performance.now();
+  return {
+    roomId,
+    gameState: createGameState(1, now, MAP_SIZE),
+    players: new Map(),
+    sockets: new Map(),
+    createdAt: now,
+    lastTickAt: now
+  };
+}
+
+function handleRawMessage(roomState: RoomState, socket: WebSocket, raw: string): void {
   let message: ClientToServerMessage;
   try {
     message = JSON.parse(raw) as ClientToServerMessage;
@@ -85,76 +104,149 @@ function handleRawMessage(socket: WebSocket, raw: string): void {
     return;
   }
 
-  if (message.roomId !== NETWORK_ROOM_ID) {
+  if (message.roomId !== roomState.roomId) {
     sendMessage(socket, { ok: false, message: "房间不存在" });
     return;
   }
 
   if (message.type === "hello") {
-    const session = getOrCreateSession(message.clientId, message.nickname);
-    sockets.set(socket, session);
-    syncNetworkPlayers();
+    const session = getOrCreateSession(roomState, message.clientId, message.nickname);
+    bindSocketToSession(roomState, socket, session);
+    syncNetworkPlayers(roomState);
     send(socket, {
       type: "connected",
-      roomId: NETWORK_ROOM_ID,
+      roomId: roomState.roomId,
       clientId: session.clientId
     });
-    sendState(socket, session);
+    sendState(roomState, socket, session);
     return;
   }
 
   if (message.type === "command") {
-    const session = sockets.get(socket) ?? getOrCreateSession(message.clientId, "玩家");
-    sockets.set(socket, session);
-    handleCommand(socket, session, message.inputText);
+    const session = getSessionForCommand(roomState, socket, message.clientId);
+    bindSocketToSession(roomState, socket, session);
+    handleCommand(roomState, socket, session, message.inputText);
   }
 }
 
-function handleCommand(socket: WebSocket, session: ClientSession, inputText: string): void {
+function handleSocketClose(roomState: RoomState, socket: WebSocket): void {
+  const clientId = roomState.sockets.get(socket);
+  roomState.sockets.delete(socket);
+
+  if (!clientId) {
+    return;
+  }
+
+  const session = roomState.players.get(clientId);
+  if (!session) {
+    return;
+  }
+
+  session.lastSeenAt = performance.now();
+  session.connected = hasOpenSocketForClient(roomState, clientId);
+  syncNetworkPlayers(roomState);
+  broadcastState(roomState);
+}
+
+function handleCommand(
+  roomState: RoomState,
+  socket: WebSocket,
+  session: ServerPlayerSession,
+  inputText: string
+): void {
   const now = performance.now();
+  session.lastSeenAt = now;
+
   const parsed = parseCommand(inputText);
   let result: CommandResult;
 
   if ("error" in parsed) {
     result = { ok: false, message: parsed.error };
   } else {
-    const occupiedResult = getOccupiedJoinResult(session, parsed.type === "join" ? parsed.countryId : null);
-    if (occupiedResult) {
-      result = occupiedResult;
+    const joinControllerId =
+      parsed.type === "join" ? resolveJoinControllerId(roomState.gameState, parsed.countryId) : null;
+    const joinValidation = validateJoinRequest(roomState, session, joinControllerId);
+
+    if (joinValidation) {
+      result = joinValidation;
     } else {
-      applySessionContext(session);
-      result = executeCommand(state, parsed, now);
-      syncSessionFromState(session);
-      syncNetworkPlayers();
+      const context = createCommandContext(session);
+      result = executeCommand(roomState.gameState, parsed, now, context);
+
+      if (result.ok && parsed.type === "join" && joinControllerId !== null) {
+        session.factionId = joinControllerId;
+      }
+
+      if (result.ok && parsed.type === "setNickname") {
+        session.nickname = getDisplayNickname(session.profile);
+      }
     }
   }
 
-  appendCommandLog(state, inputText, result, now);
+  syncNetworkPlayers(roomState);
+  appendCommandLog(roomState.gameState, inputText, result, now, {
+    clientId: session.clientId,
+    nickname: session.nickname,
+    factionId: session.factionId
+  });
   sendMessage(socket, result);
-  broadcastState();
+  broadcastState(roomState);
 }
 
-function getOrCreateSession(clientId: string, nickname: string): ClientSession {
-  const existing = sessions.get(clientId);
+function getSessionForCommand(
+  roomState: RoomState,
+  socket: WebSocket,
+  clientId: string
+): ServerPlayerSession {
+  const socketClientId = roomState.sockets.get(socket);
+  if (socketClientId) {
+    const session = roomState.players.get(socketClientId);
+    if (session) {
+      return session;
+    }
+  }
+
+  return getOrCreateSession(roomState, clientId, "玩家");
+}
+
+function getOrCreateSession(
+  roomState: RoomState,
+  clientId: string,
+  nickname: string
+): ServerPlayerSession {
+  const normalizedClientId = normalizeClientId(clientId);
+  const existing = roomState.players.get(normalizedClientId);
   if (existing) {
     if (nickname.trim()) {
-      existing.nickname = nickname.trim();
-      setCustomNickname(existing.profile, existing.nickname);
+      setCustomNickname(existing.profile, nickname.trim());
+      existing.nickname = getDisplayNickname(existing.profile);
     }
+    existing.connected = true;
+    existing.lastSeenAt = performance.now();
     return existing;
   }
 
   const profile = createNicknameProfile(nickname);
-  const session: ClientSession = {
-    clientId,
+  const session: ServerPlayerSession = {
+    clientId: normalizedClientId,
     nickname: getDisplayNickname(profile),
-    mainCountryId: null,
-    countryIds: [],
-    controllerCountryId: null,
+    factionId: null,
+    connected: true,
+    lastSeenAt: performance.now(),
     profile
   };
-  sessions.set(clientId, session);
+  roomState.players.set(normalizedClientId, session);
   return session;
+}
+
+function bindSocketToSession(
+  roomState: RoomState,
+  socket: WebSocket,
+  session: ServerPlayerSession
+): void {
+  roomState.sockets.set(socket, session.clientId);
+  session.connected = true;
+  session.lastSeenAt = performance.now();
 }
 
 function createNicknameProfile(nickname: string): PlayerProfile {
@@ -164,30 +256,46 @@ function createNicknameProfile(nickname: string): PlayerProfile {
   return profile;
 }
 
-function getOccupiedJoinResult(
-  session: ClientSession,
-  requestedCountryId: number | null
-): CommandResult | null {
-  if (requestedCountryId === null || session.countryIds.length > 0) {
-    return null;
-  }
+function createCommandContext(session: ServerPlayerSession): CommandContext {
+  return {
+    mode: "server",
+    clientId: session.clientId,
+    factionId: session.factionId,
+    nickname: session.nickname,
+    playerProfile: session.profile
+  };
+}
 
-  const controllerCountryId = resolveJoinControllerId(requestedCountryId);
+function validateJoinRequest(
+  roomState: RoomState,
+  session: ServerPlayerSession,
+  controllerCountryId: number | null
+): CommandResult | null {
   if (controllerCountryId === null) {
     return null;
   }
 
-  const occupied = [...sessions.values()].some(
+  if (session.factionId !== null) {
+    if (session.factionId === controllerCountryId) {
+      return null;
+    }
+
+    return {
+      ok: false,
+      message: `你已经加入 ${session.factionId} 号国家`
+    };
+  }
+
+  const occupied = [...roomState.players.values()].some(
     (candidate) =>
       candidate.clientId !== session.clientId &&
-      candidate.controllerCountryId === controllerCountryId &&
-      candidate.countryIds.length > 0
+      candidate.factionId === controllerCountryId
   );
 
-  return occupied ? { ok: false, message: "该国家已有玩家" } : null;
+  return occupied ? { ok: false, message: "该国家已被其他玩家占用" } : null;
 }
 
-function resolveJoinControllerId(inputId: number): number | null {
+function resolveJoinControllerId(state: GameState, inputId: number): number | null {
   if (inputId < 1 || inputId > REBEL_FACTION_MAX_ID) {
     return null;
   }
@@ -200,93 +308,63 @@ function resolveJoinControllerId(inputId: number): number | null {
     ?.controllerCountryId ?? null;
 }
 
-function applySessionContext(session: ClientSession): void {
-  state.playerMainCountryId = session.mainCountryId;
-  state.playerCountryIds = [...session.countryIds];
-  state.playerProfile = session.profile;
+function syncNetworkPlayers(roomState: RoomState): NetworkPlayer[] {
+  const players = [...roomState.players.values()].map((session) =>
+    createNetworkPlayerSnapshot(roomState.gameState, session)
+  );
+  roomState.gameState.networkPlayers = players;
+  return players;
 }
 
-function applyUnionPlayerContext(): void {
-  const countryIds = [...new Set([...sessions.values()].flatMap((session) => session.countryIds))];
-  state.playerCountryIds = countryIds;
-  state.playerMainCountryId = countryIds[0] ?? null;
+function createNetworkPlayerSnapshot(
+  state: GameState,
+  session: ServerPlayerSession
+): NetworkPlayer {
+  const countryIds =
+    session.factionId === null
+      ? []
+      : state.countries
+          .filter((country) => country.controllerCountryId === session.factionId)
+          .map((country) => country.id);
+  const mainCountryId = countryIds[0] ?? null;
+
+  return {
+    clientId: session.clientId,
+    nickname: session.nickname,
+    factionId: session.factionId,
+    mainCountryId,
+    countryIds,
+    controllerCountryId: session.factionId,
+    connected: session.connected
+  };
 }
 
-function syncSessionFromState(session: ClientSession): void {
-  session.mainCountryId = state.playerMainCountryId;
-  session.countryIds = [...state.playerCountryIds];
-  session.profile = state.playerProfile;
-  session.nickname = getDisplayNickname(session.profile);
-  session.controllerCountryId = getSessionControllerCountryId(session);
-}
-
-function syncSessionsFromState(): void {
-  for (const session of sessions.values()) {
-    if (session.controllerCountryId === null) {
-      continue;
+function broadcastState(roomState: RoomState): void {
+  syncNetworkPlayers(roomState);
+  for (const [socket, clientId] of roomState.sockets) {
+    const session = roomState.players.get(clientId);
+    if (session) {
+      sendState(roomState, socket, session);
     }
-
-    session.countryIds = state.countries
-      .filter((country) => country.controllerCountryId === session.controllerCountryId)
-      .map((country) => country.id);
-    session.mainCountryId = session.countryIds.includes(session.mainCountryId ?? -1)
-      ? session.mainCountryId
-      : session.countryIds[0] ?? null;
   }
 }
 
-function getSessionControllerCountryId(session: ClientSession): number | null {
-  const mainCountry = session.mainCountryId
-    ? state.countries[session.mainCountryId - 1]
-    : undefined;
-  if (mainCountry) {
-    return mainCountry.controllerCountryId;
-  }
-
-  const firstCountry = session.countryIds[0]
-    ? state.countries[session.countryIds[0] - 1]
-    : undefined;
-  return firstCountry?.controllerCountryId ?? session.controllerCountryId;
-}
-
-function syncNetworkPlayers(): void {
-  state.networkPlayers = [...sessions.values()]
-    .filter((session) => session.countryIds.length > 0)
-    .map((session) => ({
-      clientId: session.clientId,
-      nickname: session.nickname,
-      mainCountryId: session.mainCountryId,
-      countryIds: [...session.countryIds],
-      controllerCountryId: session.controllerCountryId
-    }));
-}
-
-function broadcastState(): void {
-  syncNetworkPlayers();
-  for (const [socket, session] of sockets) {
-    sendState(socket, session);
-  }
-  applyUnionPlayerContext();
-}
-
-function sendState(socket: WebSocket, session: ClientSession): void {
+function sendState(
+  roomState: RoomState,
+  socket: WebSocket,
+  session: ServerPlayerSession
+): void {
   if (socket.readyState !== WebSocket.OPEN) {
     return;
   }
 
-  applySessionContext(session);
-  syncNetworkPlayers();
+  const players = syncNetworkPlayers(roomState);
   send(socket, {
     type: "state",
-    roomId: NETWORK_ROOM_ID,
-    state,
-    self: {
-      clientId: session.clientId,
-      nickname: session.nickname,
-      mainCountryId: session.mainCountryId,
-      countryIds: [...session.countryIds],
-      controllerCountryId: session.controllerCountryId
-    }
+    roomId: roomState.roomId,
+    state: roomState.gameState,
+    players,
+    self: createNetworkPlayerSnapshot(roomState.gameState, session)
   });
 }
 
@@ -302,4 +380,19 @@ function send(socket: WebSocket, message: ServerToClientMessage): void {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(message));
   }
+}
+
+function hasOpenSocketForClient(roomState: RoomState, clientId: string): boolean {
+  for (const [socket, socketClientId] of roomState.sockets) {
+    if (socketClientId === clientId && socket.readyState === WebSocket.OPEN) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function normalizeClientId(clientId: string): string {
+  const trimmed = clientId.trim();
+  return trimmed || `client-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 }

@@ -106,6 +106,9 @@ export type CommandLogEntry = {
   ok: boolean;
   message: string;
   createdAt: number;
+  clientId?: string;
+  nickname?: string;
+  factionId?: number | null;
 };
 
 export type RebelFaction = {
@@ -201,9 +204,27 @@ export type SerializableGameState = {
 export type NetworkPlayer = {
   clientId: string;
   nickname: string;
+  factionId: number | null;
   mainCountryId: number | null;
   countryIds: number[];
   controllerCountryId: number | null;
+  connected: boolean;
+};
+
+export type PlayerSession = {
+  clientId: string;
+  nickname: string;
+  factionId: number | null;
+  connected: boolean;
+  lastSeenAt: number;
+};
+
+export type CommandContext = {
+  mode: "local" | "server";
+  clientId?: string;
+  factionId: number | null;
+  nickname: string;
+  playerProfile?: PlayerProfile;
 };
 
 export type GameState = {

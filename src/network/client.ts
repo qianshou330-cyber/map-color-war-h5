@@ -106,6 +106,10 @@ export class NetworkGameClient {
     }
 
     if (message.type === "state") {
+      message.state.networkPlayers = message.players;
+      if (message.self?.nickname) {
+        this.nickname = message.self.nickname;
+      }
       this.onState(message.state, message.self);
       return;
     }

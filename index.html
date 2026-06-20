@@ -12,6 +12,7 @@
       <div id="game-root"></div>
       <div id="hud-root"></div>
       <form id="command-form" autocomplete="off">
+        <div id="command-chat" aria-live="polite"></div>
         <div id="command-message" aria-live="polite"></div>
         <div id="command-shortcuts" aria-label="&#x5FEB;&#x6377;&#x6307;&#x4EE4;">
           <button type="button" data-command-prefix="&#x52A0;&#x5165;">&#x52A0;&#x5165;</button>
@@ -25,6 +26,10 @@
           name="command"
           type="text"
           inputmode="text"
+          enterkeyhint="send"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
           placeholder="&#x5148;&#x8F93;&#x5165; &#x52A0;&#x5165;12 &#x9009;&#x62E9;&#x56FD;&#x5BB6;&#xFF0C;&#x518D;&#x8F93;&#x5165; &#x8FDB;&#x653B;8"
           aria-label="&#x6E38;&#x620F;&#x6307;&#x4EE4;"
         />

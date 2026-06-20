@@ -1,5 +1,5 @@
 import { COUNTRY_COUNT, REBEL_FACTION_MAX_ID, SYSTEM_MESSAGES } from "../constants";
-import type { Command, CommandResult, Country, GameState } from "../types";
+import type { Command, CommandContext, CommandResult, Country, GameState } from "../types";
 import { getAttackRoute, type AttackRoute } from "./attackRules";
 import { hasAttackAgainstTarget, removeAttackParticipant, startAttack, stopAttack } from "./battle";
 import { normalizeNickname, setCustomNickname } from "./playerProfile";
@@ -80,7 +80,8 @@ export function parseCommand(input: string): Command | { error: string } {
 export function executeCommand(
   state: GameState,
   command: Command,
-  now = performance.now()
+  now = performance.now(),
+  context?: CommandContext
 ): CommandResult {
   if (state.isRoundEnding) {
     return setMessage(state, "本局即将重开，请稍候", false);
@@ -88,34 +89,45 @@ export function executeCommand(
 
   switch (command.type) {
     case "join":
-      return joinCountry(state, command.countryId);
+      return joinCountry(state, command.countryId, context);
     case "attack":
-      return attackCountry(state, command.targetCountryId, now);
+      return attackCountry(state, command.targetCountryId, now, context);
     case "truce":
-      return truceCountry(state, command.targetCountryId);
+      return truceCountry(state, command.targetCountryId, context);
     case "ally":
-      return allyCountry(state, command.countryId, now);
+      return allyCountry(state, command.countryId, now, context);
     case "breakAlliance":
-      return breakAlliance(state, command.countryId);
+      return breakAlliance(state, command.countryId, context);
     case "acceptAlliance":
-      return acceptAlliance(state, command.countryId);
+      return acceptAlliance(state, command.countryId, context);
     case "setNickname":
-      return setNicknameCommand(state, command.nickname);
+      return setNicknameCommand(state, command.nickname, context);
   }
 }
 
-function joinCountry(state: GameState, inputId: number): CommandResult {
+function joinCountry(
+  state: GameState,
+  inputId: number,
+  context?: CommandContext
+): CommandResult {
   const target = resolveJoinTarget(state, inputId);
   if (!target) {
     return setMessage(state, SYSTEM_MESSAGES.invalidCountryId, false);
   }
 
-  if (state.playerCountryIds.length > 0) {
-    return setMessage(state, `你已经加入 ${state.playerMainCountryId} 号国家`, false);
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length > 0 || actor.factionId !== null) {
+    return setMessage(
+      state,
+      `你已经加入 ${actor.factionId ?? actor.mainCountryId} 号国家`,
+      false
+    );
   }
 
-  state.playerMainCountryId = target.countries[0].id;
-  state.playerCountryIds = target.countries.map((country) => country.id);
+  if (!isServerContext(context)) {
+    state.playerMainCountryId = target.countries[0].id;
+    state.playerCountryIds = target.countries.map((country) => country.id);
+  }
 
   for (const country of target.countries) {
     country.owner = "player";
@@ -141,18 +153,23 @@ function joinCountry(state: GameState, inputId: number): CommandResult {
 function attackCountry(
   state: GameState,
   inputTargetCountryId: number,
-  now: number
+  now: number,
+  context?: CommandContext
 ): CommandResult {
   const targetCountry = resolvePlayableTargetCountry(state, inputTargetCountryId);
   if (!targetCountry) {
     return setMessage(state, SYSTEM_MESSAGES.invalidCountryId, false);
   }
 
-  if (state.playerCountryIds.length === 0) {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0) {
     return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
   }
 
-  if (state.playerCountryIds.includes(targetCountry.id)) {
+  if (
+    actor.countryIds.includes(targetCountry.id) ||
+    targetCountry.controllerCountryId === actor.factionId
+  ) {
     return setMessage(state, SYSTEM_MESSAGES.attackOwnCountry, false);
   }
 
@@ -160,7 +177,7 @@ function attackCountry(
     return setMessage(state, "不能进攻已结盟国家", false);
   }
 
-  const participants = findAttackParticipants(state, targetCountry);
+  const participants = findAttackParticipants(state, targetCountry, actor.countryIds);
   if (participants.length === 0) {
     return setMessage(state, ATTACK_REACHABLE_ONLY_MESSAGE, false);
   }
@@ -194,31 +211,47 @@ function attackCountry(
   );
 }
 
-function truceCountry(state: GameState, inputTargetCountryId: number): CommandResult {
+function truceCountry(
+  state: GameState,
+  inputTargetCountryId: number,
+  context?: CommandContext
+): CommandResult {
   const targetCountry = resolvePlayableTargetCountry(state, inputTargetCountryId);
   if (!targetCountry) {
     return setMessage(state, SYSTEM_MESSAGES.invalidCountryId, false);
   }
 
-  if (!hasAttackAgainstTarget(state, targetCountry.id)) {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0) {
+    return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
+  }
+
+  const participantIds = getCommandParticipantIds(state, actor.countryIds);
+  if (!hasAttackAgainstTarget(state, targetCountry.id, participantIds)) {
     return setMessage(state, "当前没有对该国家的进攻任务", false);
   }
 
-  stopAttack(state, targetCountry.id);
+  stopAttack(state, targetCountry.id, participantIds);
   return setMessage(state, `已停止进攻 ${targetCountry.displayCountryId} 号国家`);
 }
 
-function allyCountry(state: GameState, inputId: number, now: number): CommandResult {
+function allyCountry(
+  state: GameState,
+  inputId: number,
+  now: number,
+  context?: CommandContext
+): CommandResult {
   const country = resolvePlayableTargetCountry(state, inputId);
   if (!country) {
     return setMessage(state, SYSTEM_MESSAGES.invalidCountryId, false);
   }
 
-  if (state.playerCountryIds.length === 0 || state.playerMainCountryId === null) {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0 || actor.mainCountryId === null) {
     return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
   }
 
-  if (state.playerCountryIds.includes(country.id)) {
+  if (actor.countryIds.includes(country.id) || country.controllerCountryId === actor.factionId) {
     return setMessage(state, "不能和自己的国家结盟", false);
   }
 
@@ -236,7 +269,7 @@ function allyCountry(state: GameState, inputId: number, now: number): CommandRes
 
   if (country.controller === "human") {
     state.pendingAllianceRequest = {
-      fromCountryId: state.playerMainCountryId,
+      fromCountryId: actor.mainCountryId,
       toCountryId: country.id,
       createdAt: now
     };
@@ -247,8 +280,13 @@ function allyCountry(state: GameState, inputId: number, now: number): CommandRes
   return setMessage(state, `已和 ${country.displayCountryId} 号国家结盟`);
 }
 
-function acceptAlliance(state: GameState, inputId: number): CommandResult {
-  if (state.playerCountryIds.length === 0 || state.playerMainCountryId === null) {
+function acceptAlliance(
+  state: GameState,
+  inputId: number,
+  context?: CommandContext
+): CommandResult {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0 || actor.mainCountryId === null) {
     return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
   }
 
@@ -262,7 +300,7 @@ function acceptAlliance(state: GameState, inputId: number): CommandResult {
     !country ||
     !request ||
     request.fromCountryId !== country.id ||
-    !state.playerCountryIds.includes(request.toCountryId)
+    !actor.countryIds.includes(request.toCountryId)
   ) {
     return setMessage(state, "当前没有该国家的结盟申请", false);
   }
@@ -272,7 +310,15 @@ function acceptAlliance(state: GameState, inputId: number): CommandResult {
   return setMessage(state, `已同意和 ${country.displayCountryId} 号国家结盟`);
 }
 
-function breakAlliance(state: GameState, inputId: number): CommandResult {
+function breakAlliance(
+  state: GameState,
+  inputId: number,
+  context?: CommandContext
+): CommandResult {
+  if (getCommandActor(state, context).countryIds.length === 0) {
+    return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
+  }
+
   const country = resolvePlayableTargetCountry(state, inputId);
   if (!country || state.allyCountryId !== country.id) {
     return setMessage(state, "该国家不是当前结盟国家", false);
@@ -288,8 +334,16 @@ function breakAlliance(state: GameState, inputId: number): CommandResult {
   );
 }
 
-function setNicknameCommand(state: GameState, nickname: string): CommandResult {
-  const savedNickname = setCustomNickname(state.playerProfile, nickname);
+function setNicknameCommand(
+  state: GameState,
+  nickname: string,
+  context?: CommandContext
+): CommandResult {
+  const profile = context?.playerProfile ?? state.playerProfile;
+  const savedNickname = setCustomNickname(profile, nickname);
+  if (!isServerContext(context)) {
+    state.playerProfile = profile;
+  }
   return setMessage(state, `昵称已设置为 ${savedNickname}`);
 }
 
@@ -335,12 +389,10 @@ function resolvePlayableTargetCountry(state: GameState, inputId: number): Countr
 
 function findAttackParticipants(
   state: GameState,
-  targetCountry: Country
+  targetCountry: Country,
+  actorCountryIds: number[]
 ): Array<{ country: Country; route: AttackRoute }> {
-  const sourceIds = [
-    ...state.playerCountryIds,
-    ...(state.allyCountryId !== null ? [state.allyCountryId] : [])
-  ];
+  const sourceIds = getCommandParticipantIds(state, actorCountryIds);
   const uniqueSourceIds = [...new Set(sourceIds)];
 
   return uniqueSourceIds.flatMap((countryId) => {
@@ -352,6 +404,53 @@ function findAttackParticipants(
     const route = getAttackRoute(state, country, targetCountry);
     return route ? [{ country, route }] : [];
   });
+}
+
+function getCommandParticipantIds(state: GameState, actorCountryIds: number[]): number[] {
+  return [
+    ...actorCountryIds,
+    ...(state.allyCountryId !== null ? [state.allyCountryId] : [])
+  ];
+}
+
+function getCommandActor(
+  state: GameState,
+  context?: CommandContext
+): {
+  factionId: number | null;
+  mainCountryId: number | null;
+  countryIds: number[];
+} {
+  if (isServerContext(context)) {
+    const countryIds =
+      context.factionId === null
+        ? []
+        : getCountryIdsByController(state, context.factionId);
+    return {
+      factionId: context.factionId,
+      mainCountryId: countryIds[0] ?? null,
+      countryIds
+    };
+  }
+
+  const mainCountry = state.playerMainCountryId
+    ? getCountry(state, state.playerMainCountryId)
+    : undefined;
+  return {
+    factionId: mainCountry?.controllerCountryId ?? null,
+    mainCountryId: state.playerMainCountryId,
+    countryIds: [...state.playerCountryIds]
+  };
+}
+
+function getCountryIdsByController(state: GameState, controllerCountryId: number): number[] {
+  return state.countries
+    .filter((country) => country.controllerCountryId === controllerCountryId)
+    .map((country) => country.id);
+}
+
+function isServerContext(context: CommandContext | undefined): context is CommandContext {
+  return context?.mode === "server";
 }
 
 function setMessage(state: GameState, message: string, ok = true): CommandResult {

@@ -110,9 +110,11 @@ function assignCountryToRebelFaction(
   country.controller = "computer";
   paintWholeCountry(country, faction.id);
 
-  state.playerCountryIds = state.playerCountryIds.filter((countryId) => countryId !== country.id);
-  if (state.playerMainCountryId === country.id) {
-    state.playerMainCountryId = state.playerCountryIds[0] ?? null;
+  if (state.networkPlayers.length === 0) {
+    state.playerCountryIds = state.playerCountryIds.filter((countryId) => countryId !== country.id);
+    if (state.playerMainCountryId === country.id) {
+      state.playerMainCountryId = state.playerCountryIds[0] ?? null;
+    }
   }
 
   for (const soldier of state.soldiers) {

@@ -140,15 +140,31 @@ export function updateBattle(state: GameState, now: number): void {
   cleanupOrphanCounters(state);
 }
 
-export function hasAttackAgainstTarget(state: GameState, targetCountryId: number): boolean {
+export function hasAttackAgainstTarget(
+  state: GameState,
+  targetCountryId: number,
+  participantCountryIds?: number[]
+): boolean {
   return state.activeAttacks.some(
-    (attack) => attack.kind === "attack" && attack.targetCountryId === targetCountryId
+    (attack) =>
+      attack.kind === "attack" &&
+      attack.targetCountryId === targetCountryId &&
+      (!participantCountryIds ||
+        attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
   );
 }
 
-export function stopAttack(state: GameState, targetCountryId: number): boolean {
+export function stopAttack(
+  state: GameState,
+  targetCountryId: number,
+  participantCountryIds?: number[]
+): boolean {
   const attacks = state.activeAttacks.filter(
-    (attack) => attack.kind === "attack" && attack.targetCountryId === targetCountryId
+    (attack) =>
+      attack.kind === "attack" &&
+      attack.targetCountryId === targetCountryId &&
+      (!participantCountryIds ||
+        attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
   );
   if (attacks.length === 0) {
     return false;

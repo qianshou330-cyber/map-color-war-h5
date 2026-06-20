@@ -1,17 +1,21 @@
-import type { CommandResult, GameState } from "../types";
+import type { CommandLogEntry, CommandResult, GameState } from "../types";
+
+type CommandLogSource = Pick<CommandLogEntry, "clientId" | "nickname" | "factionId">;
 
 export function appendCommandLog(
   state: GameState,
   inputText: string,
   result: CommandResult,
-  now = performance.now()
+  now = performance.now(),
+  source: CommandLogSource = {}
 ): void {
   state.commandLog.push({
     id: state.nextCommandLogId,
     input: inputText,
     ok: result.ok,
     message: result.message,
-    createdAt: now
+    createdAt: now,
+    ...source
   });
   state.nextCommandLogId += 1;
 

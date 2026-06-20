@@ -60,6 +60,7 @@ export class MapColorWarScene extends Phaser.Scene {
   private onCountrySelected?: (countryId: number, routeMessage?: string) => void;
   private onRouteSelected?: (message: string) => void;
   private readonly authoritativeRemote: boolean;
+  private readonly commandOnlyMode: boolean;
   private elapsedSinceHud = 0;
   private lastLabelRound = 0;
   private lastLabelSignature = "";
@@ -69,7 +70,8 @@ export class MapColorWarScene extends Phaser.Scene {
     onStateChanged: () => void,
     onCountrySelected?: (countryId: number, routeMessage?: string) => void,
     onRouteSelected?: (message: string) => void,
-    authoritativeRemote = false
+    authoritativeRemote = false,
+    commandOnlyMode = false
   ) {
     super("MapColorWarScene");
     this.state = state;
@@ -77,6 +79,7 @@ export class MapColorWarScene extends Phaser.Scene {
     this.onCountrySelected = onCountrySelected;
     this.onRouteSelected = onRouteSelected;
     this.authoritativeRemote = authoritativeRemote;
+    this.commandOnlyMode = commandOnlyMode;
   }
 
   create(): void {
@@ -572,6 +575,10 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.commandOnlyMode) {
+      return;
+    }
+
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     const point = { x: worldPoint.x, y: worldPoint.y };
     const routeHit = this.findRouteAtPoint(point);
@@ -703,7 +710,10 @@ export class MapColorWarScene extends Phaser.Scene {
 
   private getNetworkPlayerForGroup(controllerCountryId: number, countries: Country[]) {
     return this.state.networkPlayers.find((player) => {
-      if (player.controllerCountryId === controllerCountryId) {
+      if (
+        player.factionId === controllerCountryId ||
+        player.controllerCountryId === controllerCountryId
+      ) {
         return true;
       }
 

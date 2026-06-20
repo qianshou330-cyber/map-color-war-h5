@@ -102,14 +102,16 @@ export function setCountryController(
   country.controller = controlledByPlayer ? "human" : "computer";
   paintWholeCountry(country, controllerCountryId);
 
-  if (controlledByPlayer) {
-    if (!state.playerCountryIds.includes(country.id)) {
-      state.playerCountryIds.push(country.id);
-    }
-  } else {
-    state.playerCountryIds = state.playerCountryIds.filter((id) => id !== country.id);
-    if (state.playerMainCountryId === country.id) {
-      state.playerMainCountryId = state.playerCountryIds[0] ?? null;
+  if (state.networkPlayers.length === 0) {
+    if (controlledByPlayer) {
+      if (!state.playerCountryIds.includes(country.id)) {
+        state.playerCountryIds.push(country.id);
+      }
+    } else {
+      state.playerCountryIds = state.playerCountryIds.filter((id) => id !== country.id);
+      if (state.playerMainCountryId === country.id) {
+        state.playerMainCountryId = state.playerCountryIds[0] ?? null;
+      }
     }
   }
 
@@ -133,6 +135,24 @@ export function isControllerOwnedByPlayer(
   controllerCountryId: number,
   excludedCountryId?: number
 ): boolean {
+  if (
+    state.networkPlayers.some(
+      (player) =>
+        player.factionId === controllerCountryId ||
+        player.controllerCountryId === controllerCountryId ||
+        player.countryIds.some((countryId) => {
+          if (countryId === excludedCountryId) {
+            return false;
+          }
+
+          const country = getCountry(state, countryId);
+          return country?.controllerCountryId === controllerCountryId;
+        })
+    )
+  ) {
+    return true;
+  }
+
   return state.playerCountryIds.some((countryId) => {
     if (countryId === excludedCountryId) {
       return false;

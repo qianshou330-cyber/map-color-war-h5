@@ -26,6 +26,7 @@ export type ServerToClientMessage =
       type: "state";
       roomId: string;
       state: GameState;
+      players: NetworkPlayer[];
       self: NetworkPlayer | null;
     }
   | {
