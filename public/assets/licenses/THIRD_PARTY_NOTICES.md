@@ -10,3 +10,9 @@ Planned safe asset sources:
 - Game-icons.net: CC BY 3.0. Use only with attribution if an original icon file is copied into the project.
 
 The crossed-blades combat marker in the current game is drawn in code and does not copy a third-party icon.
+
+## Yulin-W/alternate-history-editor
+
+- Source: https://github.com/Yulin-W/alternate-history-editor
+- License: MIT License
+- Usage: the built-in `1206 Rise of Mongolia` default map is generated from the repository's `Historic Scenarios/1206-Rise-of-Mongolia.json` scenario and `docs/module/map_admin.js` GeoJSON basemap. The game stores a compact derived `EditableMapData` JSON and does not import the original timeline, legend, UI, or Leaflet runtime.

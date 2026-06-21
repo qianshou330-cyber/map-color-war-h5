@@ -14,6 +14,7 @@ import { createGameState } from "./game/state";
 import { NetworkGameClient, getConfiguredWebSocketUrl, isNetworkModeEnabled } from "./network/client";
 import { MapColorWarScene } from "./phaser/MapColorWarScene";
 import { normalizeSettledCountryPaint } from "./game/provinces";
+import { createBuiltInDefaultEditableMap } from "./map/defaultMaps";
 import { createFantasyEditableMapData } from "./map/fantasy";
 import type {
   EditableMapData,
@@ -226,6 +227,7 @@ function showEditor(): void {
 function getDefaultEditableMapData(): EditableMapData | undefined {
   return (
     loadSavedEditableMap() ??
+    createBuiltInDefaultEditableMap() ??
     createFantasyEditableMapData({
       seed: "local-rugged-archipelago",
       worldType: "twinContinents",

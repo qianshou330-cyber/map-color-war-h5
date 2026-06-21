@@ -235,3 +235,33 @@ DEFAULT_EDITABLE_MAP_JSON={...}
 ```
 
 设置后重新部署 Render，服务端会用这张图片描边地图创建 `room-1`。
+## GeoJSON / Alternate History 导入
+
+管理员入口 `?admin=1` 支持导入 GeoJSON 或 Alternate History 风格地图数据：
+
+1. 打开管理员地图编辑器。
+2. 在 `GeoJSON / Alternate History 导入` 区域选择 `.json` 或 `.geojson` 文件。
+3. 默认开启 `合并区域`，会把行政区面合并成可玩的陆地外轮廓。
+4. 默认开启 `翻转 Y 轴`，适合经纬度 GeoJSON；如果导入的是屏幕像素坐标且上下颠倒，可关闭。
+5. 点击 `导入轮廓` 后预览陆地，再点击 `保存` 或 `生成地图`。
+
+支持的输入：
+
+- 标准 GeoJSON：`FeatureCollection`、`Feature`、`GeometryCollection`、`Polygon`、`MultiPolygon`。
+- Alternate History 保存文件中带有 `customMapGeojson` / `geojson` / `mapGeojson` 等字段的地图数据。
+
+限制：
+
+- 第一版只导入地图轮廓，不导入历史时间线、图例、颜色状态或国家名称。
+- 如果导入的是 Alternate History 历史剧本但不包含 `customMapGeojson`，只能读取颜色时间线，无法生成地图轮廓。
+- `Yulin-W/alternate-history-editor` 为 MIT，可作为实现参考；`blaze133766/alternate-history` 当前未检测到明确许可证，默认只参考交互方式，不复制源码或素材。
+
+## 内置默认地图：1206 Rise of Mongolia
+
+普通玩家没有本机保存地图时，游戏默认使用内置的 `1206 Rise of Mongolia` 地图。该地图由 `Yulin-W/alternate-history-editor` 的 `1206-Rise-of-Mongolia.json` 剧本和 `map_admin.js` 行政区底图转换而来：
+
+- 剧本 JSON 提供 `mapType=admin` 和参与区域编号。
+- `map_admin.js` 提供真实 GeoJSON 面数据。
+- 项目内只保存转换后的轻量 `EditableMapData`，路径为 `src/assets/defaultMaps/riseOfMongolia1206.json`。
+- 当前版本只使用地图轮廓生成 40 国，不导入原剧本时间线、颜色、图例或国家名称。
+- 如需重新生成内置地图，可运行 `npm run map:build-mongolia`。

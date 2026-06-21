@@ -3,6 +3,7 @@ import {
   createFantasyEditableMapData,
   normalizeMapGenerationConfig
 } from "../map/fantasy";
+import { importPolygonsFromGeoJsonText } from "../map/geojsonImport";
 import { traceLandPolygonsFromImageData } from "../map/imageTrace";
 import type { EditableMapData, FantasyWorldType, MapGenerationConfig, Point } from "../types";
 import { distance, polygonArea } from "../utils/geometry";
@@ -30,6 +31,7 @@ export type MapEditorController = {
 export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEditorController {
   root.innerHTML = editorMarkup();
   upgradeAzgaarGeneratorMarkup(root);
+  upgradeGeoJsonImportMarkup(root);
 
   const canvas = requiredElement<HTMLCanvasElement>(root, ".map-editor-canvas");
   const status = requiredElement<HTMLDivElement>(root, ".map-editor-status");
@@ -49,6 +51,12 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const imageSmoothingInput = requiredElement<HTMLInputElement>(root, "[data-image-field='smoothing']");
   const imageMinIslandInput = requiredElement<HTMLInputElement>(root, "[data-image-field='minIslandArea']");
   const imageTraceButton = requiredElement<HTMLButtonElement>(root, "[data-action='image-trace']");
+  const geoJsonFileInput = requiredElement<HTMLInputElement>(root, "[data-geojson-field='file']");
+  const geoJsonMinPartInput = requiredElement<HTMLInputElement>(root, "[data-geojson-field='minPartArea']");
+  const geoJsonSimplifyInput = requiredElement<HTMLInputElement>(root, "[data-geojson-field='simplify']");
+  const geoJsonInvertYInput = requiredElement<HTMLInputElement>(root, "[data-geojson-field='invertY']");
+  const geoJsonUnionInput = requiredElement<HTMLInputElement>(root, "[data-geojson-field='union']");
+  const geoJsonImportButton = requiredElement<HTMLButtonElement>(root, "[data-action='geojson-import']");
   const undoButton = requiredElement<HTMLButtonElement>(root, "[data-action='undo']");
   const clearButton = requiredElement<HTMLButtonElement>(root, "[data-action='clear']");
   const saveButton = requiredElement<HTMLButtonElement>(root, "[data-action='save']");
@@ -158,6 +166,41 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
       })
       .catch(() => {
         setStatus("图片读取失败，请换一张 PNG/JPG 参考图");
+      });
+  });
+
+  geoJsonImportButton.addEventListener("click", () => {
+    const file = geoJsonFileInput.files?.[0];
+    if (!file) {
+      setStatus("请先选择 GeoJSON 或 Alternate History JSON 文件");
+      return;
+    }
+
+    setStatus("正在读取 GeoJSON 并转换陆地轮廓...");
+    void importGeoJsonFile(file)
+      .then((result) => {
+        if (result.polygons.length === 0) {
+          setStatus("没有可用轮廓，请检查文件是否包含 Polygon 或 MultiPolygon");
+          return;
+        }
+
+        landParts = result.polygons;
+        currentSourceAspectRatio = result.sourceAspectRatio;
+        currentGenerationConfig = normalizeMapGenerationConfig({
+          ...readGenerationConfig(),
+          seed: `geojson-import-${Date.now().toString(36)}`,
+          worldType: "twinContinents",
+          mapViewMode: "mixed"
+        });
+        setGenerationForm(currentGenerationConfig);
+        syncTextarea();
+        setStatus(
+          `已导入 ${landParts.length} 块轮廓，读取 ${result.featureCount} 个面，过滤 ${result.removedParts} 个小碎片`
+        );
+        redraw();
+      })
+      .catch(() => {
+        setStatus("导入失败：文件里没有可识别的 GeoJSON 轮廓");
       });
   });
 
@@ -344,6 +387,16 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
       landThreshold: Number(imageThresholdInput.value),
       smoothing: Number(imageSmoothingInput.value),
       minIslandArea: Number(imageMinIslandInput.value)
+    });
+  }
+
+  async function importGeoJsonFile(file: File) {
+    const text = await file.text();
+    return importPolygonsFromGeoJsonText(text, {
+      minPartArea: Number(geoJsonMinPartInput.value),
+      simplifyTolerance: Number(geoJsonSimplifyInput.value),
+      invertY: geoJsonInvertYInput.checked,
+      unionFeatures: geoJsonUnionInput.checked
     });
   }
 
@@ -572,6 +625,47 @@ function editorMarkup(): string {
       </div>
     </section>
   `;
+}
+
+function upgradeGeoJsonImportMarkup(root: HTMLElement): void {
+  const imagePanel = root.querySelector<HTMLElement>(".map-editor-image-trace");
+  if (!imagePanel || root.querySelector("[data-action='geojson-import']")) {
+    return;
+  }
+
+  imagePanel.insertAdjacentHTML(
+    "afterend",
+    `
+      <div class="map-editor-geojson-import">
+        <div class="map-editor-geojson-title">GeoJSON / Alternate History 导入</div>
+        <div class="map-editor-geojson-grid">
+          <label class="map-editor-file-field">
+            <span>地图 JSON</span>
+            <input data-geojson-field="file" type="file" accept=".json,.geojson,application/json,application/geo+json" />
+          </label>
+          <label>
+            <span>最小碎片</span>
+            <input data-geojson-field="minPartArea" type="number" min="0.00001" max="0.05" step="0.00005" value="0.00025" />
+          </label>
+          <label>
+            <span>简化强度</span>
+            <input data-geojson-field="simplify" type="number" min="0" max="0.02" step="0.0002" value="0.0012" />
+          </label>
+          <label class="map-editor-check-field">
+            <input data-geojson-field="invertY" type="checkbox" checked />
+            <span>翻转 Y 轴</span>
+          </label>
+          <label class="map-editor-check-field">
+            <input data-geojson-field="union" type="checkbox" checked />
+            <span>合并区域</span>
+          </label>
+        </div>
+        <div class="map-editor-geojson-actions">
+          <button type="button" data-action="geojson-import">导入轮廓</button>
+        </div>
+      </div>
+    `
+  );
 }
 
 export function loadSavedEditableMap(): EditableMapData | null {

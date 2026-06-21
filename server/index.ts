@@ -7,6 +7,7 @@ import { executeCommand, parseCommand } from "../src/game/commands";
 import { createPlayerProfile, getDisplayNickname, setCustomNickname } from "../src/game/playerProfile";
 import { createGameState } from "../src/game/state";
 import { tickGame } from "../src/game/tick";
+import { createBuiltInDefaultEditableMap } from "../src/map/defaultMaps";
 import { createFantasyEditableMapData, normalizeMapGenerationConfig } from "../src/map/fantasy";
 import { createGameStatePatch } from "../src/network/statePatch";
 import { polygonArea } from "../src/utils/geometry";
@@ -116,6 +117,11 @@ function createServerEditableMapData(): EditableMapData {
     return importedMap;
   }
 
+  const builtInMap = getBuiltInServerDefaultEditableMap();
+  if (builtInMap) {
+    return builtInMap;
+  }
+
   const seed = getMapEnvValue(process.env.MAP_GENERATION_SEED, "room-1-rugged-archipelago");
   const worldType = parseWorldType(
     getMapEnvValue(process.env.MAP_GENERATION_WORLD_TYPE, "twinContinents")
@@ -131,6 +137,14 @@ function createServerEditableMapData(): EditableMapData {
     mapViewMode: parseMapViewMode(process.env.MAP_GENERATION_VIEW_MODE)
   });
   return createFantasyEditableMapData(config);
+}
+
+function getBuiltInServerDefaultEditableMap(): EditableMapData | null {
+  try {
+    return createBuiltInDefaultEditableMap();
+  } catch {
+    return null;
+  }
 }
 
 function getServerMapSize(editableMapData: EditableMapData) {
