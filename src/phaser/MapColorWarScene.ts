@@ -967,7 +967,7 @@ export class MapColorWarScene extends Phaser.Scene {
 
   private getLabelSignature(): string {
     const nickname = getDisplayNickname(this.state.playerProfile);
-    return this.getLabelGroups()
+    const labelGroupsSignature = this.getLabelGroups()
       .map((group) => {
         const countryIds = group.countries.map((country) => country.id).join(",");
         return group.isPlayerGroup
@@ -975,6 +975,29 @@ export class MapColorWarScene extends Phaser.Scene {
           : `${group.controllerCountryId}[${countryIds}]`;
       })
       .join("|");
+    return `${this.getMapGeometrySignature()}::${labelGroupsSignature}`;
+  }
+
+  private getMapGeometrySignature(): string {
+    const config = this.state.region.generationConfig;
+    const countryGeometry = this.state.countries
+      .map((country) =>
+        [
+          country.id,
+          country.center.x.toFixed(1),
+          country.center.y.toFixed(1),
+          country.area.toFixed(0)
+        ].join(":")
+      )
+      .join("|");
+    return [
+      this.state.round,
+      this.state.startedAt.toFixed(0),
+      this.state.region.id,
+      config?.seed ?? "",
+      `${this.state.mapSize.width}x${this.state.mapSize.height}`,
+      countryGeometry
+    ].join("#");
   }
 
   private getLabelGroups(): LabelGroup[] {
