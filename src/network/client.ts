@@ -1,4 +1,5 @@
 import type { GameState, NetworkPlayer } from "../types";
+import { applyGameStatePatch } from "./statePatch";
 import { NETWORK_ROOM_ID, type ClientToServerMessage, type ServerToClientMessage } from "./types";
 
 const CLIENT_ID_KEY = "map-color-war-h5:network-client-id";
@@ -23,6 +24,8 @@ export class NetworkGameClient {
   private nickname = "";
   private reconnectTimer = 0;
   private closedByUser = false;
+  private latestState: GameState | null = null;
+  private lastRevision = 0;
 
   constructor(options: NetworkGameClientOptions) {
     this.url = options.url;
@@ -45,7 +48,9 @@ export class NetworkGameClient {
         type: "hello",
         roomId: this.roomId,
         clientId: this.clientId,
-        nickname: this.nickname
+        nickname: this.nickname,
+        protocolVersion: 2,
+        supportsPatches: true
       });
       this.onStatus("已连接网络对战");
     });
@@ -105,12 +110,38 @@ export class NetworkGameClient {
       return;
     }
 
-    if (message.type === "state") {
+    if (message.type === "state" || message.type === "stateFull") {
+      const revision = message.type === "stateFull" ? message.revision : message.state.stateRevision;
       message.state.networkPlayers = message.players;
       if (message.self?.nickname) {
         this.nickname = message.self.nickname;
       }
+      this.latestState = message.state;
+      this.lastRevision = revision;
       this.onState(message.state, message.self);
+      return;
+    }
+
+    if (message.type === "statePatch") {
+      if (!this.latestState || message.baseRevision !== this.lastRevision) {
+        this.requestResync();
+        return;
+      }
+
+      if (message.players) {
+        message.patch.player.networkPlayers = message.players;
+      }
+      if (message.self?.nickname) {
+        this.nickname = message.self.nickname;
+      }
+
+      if (!applyGameStatePatch(this.latestState, message.patch)) {
+        this.requestResync();
+        return;
+      }
+
+      this.lastRevision = message.revision;
+      this.onState(this.latestState, message.self ?? null);
       return;
     }
 
@@ -121,6 +152,15 @@ export class NetworkGameClient {
 
   private send(message: ClientToServerMessage): void {
     this.socket?.send(JSON.stringify(message));
+  }
+
+  private requestResync(): void {
+    this.send({
+      type: "resync",
+      roomId: this.roomId,
+      clientId: this.clientId,
+      knownRevision: this.lastRevision
+    });
   }
 
   private clearReconnectTimer(): void {

@@ -27,6 +27,7 @@ export type MapEditorController = {
 
 export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEditorController {
   root.innerHTML = editorMarkup();
+  upgradeAzgaarGeneratorMarkup(root);
 
   const canvas = requiredElement<HTMLCanvasElement>(root, ".map-editor-canvas");
   const status = requiredElement<HTMLDivElement>(root, ".map-editor-status");
@@ -36,7 +37,9 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const seaLevelInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='seaLevel']");
   const mountainInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='mountainStrength']");
   const moistureInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='moisture']");
+  const temperatureInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='temperature']");
   const riverCountInput = requiredElement<HTMLInputElement>(root, "[data-gen-field='riverCount']");
+  const mapViewModeInput = requiredElement<HTMLSelectElement>(root, "[data-gen-field='mapViewMode']");
   const randomSeedButton = requiredElement<HTMLButtonElement>(root, "[data-action='random-seed']");
   const fantasyPreviewButton = requiredElement<HTMLButtonElement>(root, "[data-action='fantasy-preview']");
   const undoButton = requiredElement<HTMLButtonElement>(root, "[data-action='undo']");
@@ -372,7 +375,9 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
       seaLevel: Number(seaLevelInput.value),
       mountainStrength: Number(mountainInput.value),
       moisture: Number(moistureInput.value),
-      riverCount: Number(riverCountInput.value)
+      temperature: Number(temperatureInput.value),
+      riverCount: Number(riverCountInput.value),
+      mapViewMode: mapViewModeInput.value as MapGenerationConfig["mapViewMode"]
     });
   }
 
@@ -382,7 +387,9 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
     seaLevelInput.value = String(config.seaLevel);
     mountainInput.value = String(config.mountainStrength);
     moistureInput.value = String(config.moisture);
+    temperatureInput.value = String(config.temperature);
     riverCountInput.value = String(config.riverCount);
+    mapViewModeInput.value = config.mapViewMode;
   }
 
   return {
@@ -472,6 +479,102 @@ export function loadSavedEditableMap(): EditableMapData | null {
     return raw ? parseEditableMapData(raw) : null;
   } catch {
     return null;
+  }
+}
+
+function upgradeAzgaarGeneratorMarkup(root: HTMLElement): void {
+  const title = root.querySelector<HTMLElement>(".map-editor-generator-title");
+  if (title) {
+    title.textContent = "Azgaar 风格生成";
+  }
+
+  const grid = root.querySelector<HTMLElement>(".map-editor-generator-grid");
+  patchAzgaarGeneratorLabels(root);
+  if (!grid || grid.querySelector("[data-gen-field='temperature']")) {
+    return;
+  }
+
+  grid.insertAdjacentHTML(
+    "beforeend",
+    `
+      <label>
+        <span>温度</span>
+        <input data-gen-field="temperature" type="range" min="0.1" max="1" step="0.01" />
+      </label>
+      <label>
+        <span>地图视图</span>
+        <select data-gen-field="mapViewMode">
+          <option value="mixed">混合图</option>
+          <option value="political">政治图</option>
+          <option value="terrain">地形图</option>
+        </select>
+      </label>
+    `
+  );
+  patchAzgaarGeneratorLabels(root);
+}
+
+function patchAzgaarGeneratorLabels(root: HTMLElement): void {
+  const title = root.querySelector<HTMLElement>(".map-editor-generator-title");
+  if (title) {
+    title.textContent = "Azgaar 风格生成";
+  }
+
+  setFieldLabel(root, "worldType", "大陆类型");
+  setFieldLabel(root, "seaLevel", "海平面");
+  setFieldLabel(root, "mountainStrength", "山脉");
+  setFieldLabel(root, "moisture", "湿度");
+  setFieldLabel(root, "riverCount", "河流");
+  setFieldLabel(root, "temperature", "温度");
+  setFieldLabel(root, "mapViewMode", "地图视图");
+  replaceSelectOptions(root, "worldType", [
+    ["continent", "大陆"],
+    ["twinContinents", "双大陆"],
+    ["archipelago", "群岛"]
+  ]);
+  replaceSelectOptions(root, "mapViewMode", [
+    ["mixed", "混合图"],
+    ["political", "政治图"],
+    ["terrain", "地形图"]
+  ]);
+  setActionText(root, "random-seed", "随机 Seed");
+  setActionText(root, "fantasy-preview", "生成预览");
+}
+
+function setFieldLabel(root: HTMLElement, field: string, text: string): void {
+  const input = root.querySelector<HTMLElement>(`[data-gen-field='${field}']`);
+  const label = input?.closest("label")?.querySelector("span");
+  if (label) {
+    label.textContent = text;
+  }
+}
+
+function replaceSelectOptions(
+  root: HTMLElement,
+  field: string,
+  options: Array<[string, string]>
+): void {
+  const select = root.querySelector<HTMLSelectElement>(`select[data-gen-field='${field}']`);
+  if (!select) {
+    return;
+  }
+
+  const previousValue = select.value;
+  select.replaceChildren(
+    ...options.map(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      return option;
+    })
+  );
+  select.value = options.some(([value]) => value === previousValue) ? previousValue : options[0]?.[0] ?? "";
+}
+
+function setActionText(root: HTMLElement, action: string, text: string): void {
+  const button = root.querySelector<HTMLButtonElement>(`[data-action='${action}']`);
+  if (button) {
+    button.textContent = text;
   }
 }
 

@@ -8,12 +8,14 @@ import { createPlayerProfile, getDisplayNickname, setCustomNickname } from "../s
 import { createGameState } from "../src/game/state";
 import { tickGame } from "../src/game/tick";
 import { createFantasyEditableMapData, normalizeMapGenerationConfig } from "../src/map/fantasy";
+import { createGameStatePatch } from "../src/network/statePatch";
 import type {
   CommandContext,
   CommandResult,
   EditableMapData,
   FantasyWorldType,
   GameState,
+  MapViewMode,
   NetworkPlayer,
   PlayerProfile,
   PlayerSession
@@ -34,6 +36,9 @@ const MAP_SIZE = {
 
 type ServerPlayerSession = PlayerSession & {
   profile: PlayerProfile;
+  supportsPatches: boolean;
+  lastSentRevision: number;
+  lastFullRound: number;
 };
 
 type RoomState = {
@@ -73,9 +78,14 @@ setInterval(() => {
   const now = performance.now();
   const delta = now - room.lastTickAt;
   room.lastTickAt = now;
+  const previousRound = room.gameState.round;
   syncNetworkPlayers(room);
   tickGame(room.gameState, delta, now, room.gameState.mapSize);
+  if (room.gameState.round !== previousRound) {
+    resetPlayerFactionAssignments(room);
+  }
   syncNetworkPlayers(room);
+  markStateChanged(room);
 }, SERVER_TICK_MS);
 
 setInterval(() => {
@@ -105,7 +115,9 @@ function createServerEditableMapData(): EditableMapData {
     seaLevel: Number(process.env.MAP_GENERATION_SEA_LEVEL ?? 0.46),
     mountainStrength: Number(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH ?? 0.62),
     moisture: Number(process.env.MAP_GENERATION_MOISTURE ?? 0.56),
-    riverCount: Number(process.env.MAP_GENERATION_RIVER_COUNT ?? 8)
+    temperature: Number(process.env.MAP_GENERATION_TEMPERATURE ?? 0.58),
+    riverCount: Number(process.env.MAP_GENERATION_RIVER_COUNT ?? 8),
+    mapViewMode: parseMapViewMode(process.env.MAP_GENERATION_VIEW_MODE)
   });
   return createFantasyEditableMapData(config);
 }
@@ -116,6 +128,14 @@ function parseWorldType(value: string | undefined): FantasyWorldType {
   }
 
   return "continent";
+}
+
+function parseMapViewMode(value: string | undefined): MapViewMode {
+  if (value === "political" || value === "terrain" || value === "mixed") {
+    return value;
+  }
+
+  return "mixed";
 }
 
 function handleRawMessage(roomState: RoomState, socket: WebSocket, raw: string): void {
@@ -134,14 +154,23 @@ function handleRawMessage(roomState: RoomState, socket: WebSocket, raw: string):
 
   if (message.type === "hello") {
     const session = getOrCreateSession(roomState, message.clientId, message.nickname);
+    session.supportsPatches = message.protocolVersion === 2 && message.supportsPatches === true;
     bindSocketToSession(roomState, socket, session);
     syncNetworkPlayers(roomState);
+    markStateChanged(roomState);
     send(socket, {
       type: "connected",
       roomId: roomState.roomId,
       clientId: session.clientId
     });
     sendState(roomState, socket, session);
+    return;
+  }
+
+  if (message.type === "resync") {
+    const session = getSessionForCommand(roomState, socket, message.clientId);
+    bindSocketToSession(roomState, socket, session);
+    sendState(roomState, socket, session, true);
     return;
   }
 
@@ -168,6 +197,7 @@ function handleSocketClose(roomState: RoomState, socket: WebSocket): void {
   session.lastSeenAt = performance.now();
   session.connected = hasOpenSocketForClient(roomState, clientId);
   syncNetworkPlayers(roomState);
+  markStateChanged(roomState);
   broadcastState(roomState);
 }
 
@@ -212,6 +242,7 @@ function handleCommand(
     nickname: session.nickname,
     factionId: session.factionId
   });
+  markStateChanged(roomState);
   sendMessage(socket, result);
   broadcastState(roomState);
 }
@@ -256,7 +287,10 @@ function getOrCreateSession(
     factionId: null,
     connected: true,
     lastSeenAt: performance.now(),
-    profile
+    profile,
+    supportsPatches: false,
+    lastSentRevision: 0,
+    lastFullRound: 0
   };
   roomState.players.set(normalizedClientId, session);
   return session;
@@ -270,6 +304,18 @@ function bindSocketToSession(
   roomState.sockets.set(socket, session.clientId);
   session.connected = true;
   session.lastSeenAt = performance.now();
+}
+
+function resetPlayerFactionAssignments(roomState: RoomState): void {
+  for (const session of roomState.players.values()) {
+    session.factionId = null;
+    session.lastSentRevision = 0;
+    session.lastFullRound = 0;
+  }
+}
+
+function markStateChanged(roomState: RoomState): void {
+  roomState.gameState.stateRevision += 1;
 }
 
 function createNicknameProfile(nickname: string): PlayerProfile {
@@ -375,19 +421,57 @@ function broadcastState(roomState: RoomState): void {
 function sendState(
   roomState: RoomState,
   socket: WebSocket,
-  session: ServerPlayerSession
+  session: ServerPlayerSession,
+  forceFull = false
 ): void {
   if (socket.readyState !== WebSocket.OPEN) {
     return;
   }
 
   const players = syncNetworkPlayers(roomState);
+  const self = createNetworkPlayerSnapshot(roomState.gameState, session);
+
+  if (session.supportsPatches) {
+    const needsFullState =
+      forceFull ||
+      session.lastSentRevision === 0 ||
+      session.lastFullRound !== roomState.gameState.round;
+    if (needsFullState) {
+      send(socket, {
+        type: "stateFull",
+        roomId: roomState.roomId,
+        revision: roomState.gameState.stateRevision,
+        state: roomState.gameState,
+        players,
+        self
+      });
+      session.lastSentRevision = roomState.gameState.stateRevision;
+      session.lastFullRound = roomState.gameState.round;
+      return;
+    }
+
+    if (roomState.gameState.stateRevision > session.lastSentRevision) {
+      const baseRevision = session.lastSentRevision;
+      send(socket, {
+        type: "statePatch",
+        roomId: roomState.roomId,
+        baseRevision,
+        revision: roomState.gameState.stateRevision,
+        patch: createGameStatePatch(roomState.gameState),
+        players,
+        self
+      });
+      session.lastSentRevision = roomState.gameState.stateRevision;
+    }
+    return;
+  }
+
   send(socket, {
     type: "state",
     roomId: roomState.roomId,
     state: roomState.gameState,
     players,
-    self: createNetworkPlayerSnapshot(roomState.gameState, session)
+    self
   });
 }
 

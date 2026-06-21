@@ -192,3 +192,21 @@ MAP_GENERATION_RIVER_COUNT=8
 ```
 
 线上想固定使用某张 Fantasy 地图时，在 Render 环境变量里设置这些值并重新部署服务即可。
+# Azgaar 风格地图生成补充
+
+管理员入口 `?admin=1` 中提供“Azgaar 风格生成”：基于 seed 生成高度图、陆海、山脉、湿度、温度、生物群系和河流，再在宜居陆地上生成 100 个国家。普通玩家默认仍使用本机保存地图；没有保存地图时使用内置中国地图兜底。
+
+服务端可通过以下环境变量固定线上架空地图：
+
+```text
+MAP_GENERATION_SEED=room-1-fantasy
+MAP_GENERATION_WORLD_TYPE=continent
+MAP_GENERATION_SEA_LEVEL=0.46
+MAP_GENERATION_MOUNTAIN_STRENGTH=0.62
+MAP_GENERATION_MOISTURE=0.56
+MAP_GENERATION_TEMPERATURE=0.58
+MAP_GENERATION_RIVER_COUNT=8
+MAP_GENERATION_VIEW_MODE=mixed
+```
+
+`MAP_GENERATION_VIEW_MODE` 支持 `mixed`、`political`、`terrain`，分别对应混合图、政治图、地形图。

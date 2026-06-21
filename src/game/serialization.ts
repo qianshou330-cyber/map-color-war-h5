@@ -4,6 +4,7 @@ export function createSerializableGameState(state: GameState): SerializableGameS
   return {
     version: 1,
     round: state.round,
+    stateRevision: state.stateRevision,
     mapSize: { ...state.mapSize },
     region: {
       id: state.region.id,
@@ -30,7 +31,9 @@ export function createSerializableGameState(state: GameState): SerializableGameS
       startedAt: roundNumber(state.startedAt),
       remainingMs: Math.round(state.remainingMs),
       isRoundEnding: state.isRoundEnding,
-      nextRoundAt: state.nextRoundAt === null ? null : roundNumber(state.nextRoundAt)
+      nextRoundAt: state.nextRoundAt === null ? null : roundNumber(state.nextRoundAt),
+      roundEndReason: state.roundEndReason,
+      winnerControllerCountryId: state.winnerControllerCountryId
     },
     countries: state.countries.map((country) => ({
       id: country.id,
@@ -61,6 +64,11 @@ export function createSerializableGameState(state: GameState): SerializableGameS
       y: roundNumber(soldier.y),
       target: roundPoint(soldier.target),
       hp: soldier.hp,
+      maxHp: soldier.maxHp,
+      attackPower: soldier.attackPower,
+      killCount: soldier.killCount,
+      rank: soldier.rank,
+      lastHpRegenAt: roundNumber(soldier.lastHpRegenAt),
       alive: soldier.alive,
       status: soldier.status
     })),
@@ -69,12 +77,22 @@ export function createSerializableGameState(state: GameState): SerializableGameS
         id: dead.soldier.id,
         countryId: dead.soldier.countryId,
         owner: dead.soldier.owner,
+        hp: dead.soldier.hp,
+        maxHp: dead.soldier.maxHp,
+        attackPower: dead.soldier.attackPower,
+        killCount: dead.soldier.killCount,
+        rank: dead.soldier.rank,
         status: dead.soldier.status
       },
       reviveAt: roundNumber(dead.reviveAt)
     })),
     activeAttacks: state.activeAttacks.map((attack) => ({
       id: attack.id,
+      warId: attack.warId,
+      originWarId: attack.originWarId,
+      rootTargetCountryId: attack.rootTargetCountryId,
+      attackerControllerCountryId: attack.attackerControllerCountryId,
+      defenderControllerCountryId: attack.defenderControllerCountryId,
       sourceTaskId: attack.sourceTaskId,
       kind: attack.kind,
       counterControllerCountryId: attack.counterControllerCountryId,

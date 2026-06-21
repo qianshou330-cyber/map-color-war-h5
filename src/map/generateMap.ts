@@ -31,11 +31,16 @@ import {
   randomPointInPolygon
 } from "../utils/geometry";
 import { createSeededRandom, type SeededRandom } from "../utils/seededRandom";
-import { createDefaultMapGenerationConfig, createFantasyEditableMapData } from "./fantasy";
+import { createFantasyEditableMapData } from "./fantasy";
 import { createRandomRegion, createRegionFromEditableMap } from "./regions";
 
 type SeedPoint = Point & {
   landPartId: string;
+};
+
+type SeedCandidate = {
+  point: Point;
+  score: number;
 };
 
 type GeneratedMap = {
@@ -54,20 +59,19 @@ export function generateMap(
 ): GeneratedMapResult {
   let bestMap: GeneratedMap | null = null;
   let bestRegion: MapRegion | null = null;
-  const effectiveEditableMapData =
-    editableMapData ?? createFantasyEditableMapData(createDefaultMapGenerationConfig());
-  const seed = effectiveEditableMapData.generationConfig?.seed ?? `${Date.now()}-${Math.random()}`;
+  const effectiveEditableMapData = editableMapData;
+  const seed = effectiveEditableMapData?.generationConfig?.seed ?? `${Date.now()}-${Math.random()}`;
+  const baseRegion = createRegion(width, height, effectiveEditableMapData);
 
   for (let attempt = 0; attempt < MAP_GENERATION_MAX_ATTEMPTS; attempt += 1) {
-    const region = createRegion(width, height, effectiveEditableMapData);
     const rng = createSeededRandom(`${seed}:map:${attempt}`);
-    const generated = generateMapOnce(width, height, region, rng);
-    const targetMinArea = getTargetMinArea(region);
+    const generated = generateMapOnce(width, height, baseRegion, rng);
+    const targetMinArea = getTargetMinArea(baseRegion);
 
     if (generated.countries.length === COUNTRY_COUNT && generated.minArea >= targetMinArea) {
       return {
         countries: generated.countries,
-        region
+        region: baseRegion
       };
     }
 
@@ -76,7 +80,7 @@ export function generateMap(
       (!bestMap || generated.minArea > bestMap.minArea)
     ) {
       bestMap = generated;
-      bestRegion = region;
+      bestRegion = baseRegion;
     }
   }
 
@@ -88,14 +92,15 @@ export function generateMap(
   }
 
   const fallbackEditableMapData =
-    effectiveEditableMapData.generationConfig
+    effectiveEditableMapData?.generationConfig
       ? createFantasyEditableMapData({
           ...effectiveEditableMapData.generationConfig,
           worldType: "continent",
           seed: `${seed}:fallback-continent`,
           seaLevel: Math.min(0.5, effectiveEditableMapData.generationConfig.seaLevel),
           mountainStrength: Math.min(0.72, effectiveEditableMapData.generationConfig.mountainStrength),
-          moisture: Math.max(0.46, effectiveEditableMapData.generationConfig.moisture)
+          moisture: Math.max(0.46, effectiveEditableMapData.generationConfig.moisture),
+          temperature: Math.max(0.46, effectiveEditableMapData.generationConfig.temperature)
         })
       : effectiveEditableMapData;
   const region = createRegion(width, height, fallbackEditableMapData);
@@ -144,7 +149,7 @@ function generateMapOnce(
   options: MapGenerationOptions = {}
 ): GeneratedMap {
   const targetMinArea = getTargetMinArea(region);
-  const points = createRegionPoints(region, rng);
+  const points = createRegionPoints(region, rng, width, height);
   const delaunay = Delaunay.from<SeedPoint>(
     points,
     (point) => point.x,
@@ -180,7 +185,7 @@ function generateMapOnce(
     }
 
     const centroid = polygonCentroid(polygon);
-    const center = isPointInOrNearPolygon(centroid, polygon) ? centroid : seed;
+    const center = getCountrySafeCenter(region, polygon, centroid, seed, rng, width, height);
     minArea = Math.min(minArea, area);
 
     const country: Country = {
@@ -352,10 +357,15 @@ function pointOnPolygonPerimeter(polygon: Point[], targetDistance: number): Poin
   return polygon[0];
 }
 
-function createRegionPoints(region: MapRegion, rng: SeededRandom): SeedPoint[] {
+function createRegionPoints(
+  region: MapRegion,
+  rng: SeededRandom,
+  mapWidth: number,
+  mapHeight: number
+): SeedPoint[] {
   const allocations = allocateSeedCounts(region, rng.fork("allocation"));
   const points = allocations.flatMap(({ landPart, count }) =>
-    createPointsForLandPart(landPart, count, rng.fork(landPart.id))
+    createPointsForLandPart(landPart, count, rng.fork(landPart.id), region, mapWidth, mapHeight)
   );
 
   return shuffle(points.slice(0, COUNTRY_COUNT), rng.fork("shuffle"));
@@ -407,10 +417,25 @@ function allocateSeedCounts(
 function createPointsForLandPart(
   landPart: MapLandPart,
   count: number,
-  rng: SeededRandom
+  rng: SeededRandom,
+  region: MapRegion,
+  mapWidth: number,
+  mapHeight: number
 ): SeedPoint[] {
   if (count <= 0) {
     return [];
+  }
+
+  const terrainAwarePoints = createTerrainAwarePointsForLandPart(
+    landPart,
+    count,
+    rng.fork("terrain-aware"),
+    region,
+    mapWidth,
+    mapHeight
+  );
+  if (terrainAwarePoints.length === count) {
+    return terrainAwarePoints;
   }
 
   const bounds = polygonBounds(landPart.polygon);
@@ -431,7 +456,7 @@ function createPointsForLandPart(
         minY: bounds.minY + row * cellHeight,
         maxX: bounds.minX + (column + 1) * cellWidth,
         maxY: bounds.minY + (row + 1) * cellHeight
-      }, rng) ?? randomPointInPolygonWithRng(landPart.polygon, rng);
+      }, rng, region, mapWidth, mapHeight) ?? randomPointInPolygonWithRng(landPart.polygon, rng);
 
     points.push({
       ...point,
@@ -442,23 +467,324 @@ function createPointsForLandPart(
   return points;
 }
 
+function createTerrainAwarePointsForLandPart(
+  landPart: MapLandPart,
+  count: number,
+  rng: SeededRandom,
+  region: MapRegion,
+  mapWidth: number,
+  mapHeight: number
+): SeedPoint[] {
+  const terrain = region.terrain;
+  if (!terrain || region.id !== "fantasy") {
+    return [];
+  }
+
+  const candidates = createTerrainSeedCandidates(
+    landPart,
+    rng.fork("candidates"),
+    region,
+    mapWidth,
+    mapHeight
+  );
+  if (candidates.length < count) {
+    return [];
+  }
+
+  const selected: SeedCandidate[] = [];
+  const averageSpacing = Math.sqrt(Math.max(1, polygonArea(landPart.polygon) / count));
+
+  while (selected.length < count) {
+    let bestCandidate: SeedCandidate | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const candidate of candidates) {
+      if (selected.includes(candidate)) {
+        continue;
+      }
+
+      const nearestDistance =
+        selected.length === 0
+          ? averageSpacing
+          : Math.min(...selected.map((item) => distance(item.point, candidate.point)));
+      const spacingScore = Math.min(1.25, nearestDistance / Math.max(1, averageSpacing));
+      const score = candidate.score * 0.72 + spacingScore * 1.18 + rng.float(0, 0.015);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+    }
+
+    if (!bestCandidate) {
+      break;
+    }
+    selected.push(bestCandidate);
+  }
+
+  if (selected.length !== count) {
+    return [];
+  }
+
+  return selected.map((candidate) => ({
+    ...candidate.point,
+    landPartId: landPart.id
+  }));
+}
+
+function createTerrainSeedCandidates(
+  landPart: MapLandPart,
+  rng: SeededRandom,
+  region: MapRegion,
+  mapWidth: number,
+  mapHeight: number
+): SeedCandidate[] {
+  const terrain = region.terrain;
+  if (!terrain) {
+    return [];
+  }
+
+  const candidates: SeedCandidate[] = [];
+  const cellWidth = mapWidth / terrain.width;
+  const cellHeight = mapHeight / terrain.height;
+  const bounds = polygonBounds(landPart.polygon);
+
+  for (let row = 0; row < terrain.height; row += 1) {
+    for (let column = 0; column < terrain.width; column += 1) {
+      const index = row * terrain.width + column;
+      if ((terrain.biomes[index] ?? "ocean") === "ocean") {
+        continue;
+      }
+
+      const center = {
+        x: (column + 0.5) * cellWidth,
+        y: (row + 0.5) * cellHeight
+      };
+      if (
+        center.x < bounds.minX ||
+        center.x > bounds.maxX ||
+        center.y < bounds.minY ||
+        center.y > bounds.maxY ||
+        !pointInPolygon(center, landPart.polygon)
+      ) {
+        continue;
+      }
+
+      const jittered = {
+        x: center.x + rng.float(-0.38, 0.38) * cellWidth,
+        y: center.y + rng.float(-0.38, 0.38) * cellHeight
+      };
+      const point =
+        pointInPolygon(jittered, landPart.polygon) &&
+        isPlayableTerrainPoint(region, jittered, mapWidth, mapHeight)
+          ? jittered
+          : center;
+
+      candidates.push({
+        point,
+        score: getSettlementSuitability(region, point, mapWidth, mapHeight)
+      });
+    }
+  }
+
+  return candidates.sort((left, right) => right.score - left.score);
+}
+
 function randomPointInLandPartCell(
   landPart: MapLandPart,
   bounds: { minX: number; minY: number; maxX: number; maxY: number },
-  rng: SeededRandom
+  rng: SeededRandom,
+  region: MapRegion,
+  mapWidth: number,
+  mapHeight: number
 ): Point | null {
-  for (let attempt = 0; attempt < 28; attempt += 1) {
+  let bestPoint: Point | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  const searchFactors = [1, 1.65, 2.5, 3.8, 5.4];
+
+  for (const factor of searchFactors) {
+    const searchBounds = expandBounds(bounds, factor, landPart.polygon);
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const point = {
+        x: rng.float(searchBounds.minX, searchBounds.maxX),
+        y: rng.float(searchBounds.minY, searchBounds.maxY)
+      };
+
+      if (
+        pointInPolygon(point, landPart.polygon) &&
+        isPlayableTerrainPoint(region, point, mapWidth, mapHeight)
+      ) {
+        const score = getSettlementSuitability(region, point, mapWidth, mapHeight);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPoint = point;
+        }
+      }
+    }
+
+    if (bestPoint) {
+      return bestPoint;
+    }
+  }
+
+  return bestPoint;
+}
+
+function expandBounds(
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  factor: number,
+  polygon: Point[]
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  const polygonBox = polygonBounds(polygon);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const halfWidth = ((bounds.maxX - bounds.minX) * factor) / 2;
+  const halfHeight = ((bounds.maxY - bounds.minY) * factor) / 2;
+
+  return {
+    minX: Math.max(polygonBox.minX, centerX - halfWidth),
+    minY: Math.max(polygonBox.minY, centerY - halfHeight),
+    maxX: Math.min(polygonBox.maxX, centerX + halfWidth),
+    maxY: Math.min(polygonBox.maxY, centerY + halfHeight)
+  };
+}
+
+function getCountrySafeCenter(
+  region: MapRegion,
+  polygon: Point[],
+  centroid: Point,
+  seed: Point,
+  rng: SeededRandom,
+  mapWidth: number,
+  mapHeight: number
+): Point {
+  if (
+    isPointInOrNearPolygon(centroid, polygon) &&
+    isPlayableTerrainPoint(region, centroid, mapWidth, mapHeight)
+  ) {
+    return centroid;
+  }
+
+  if (pointInPolygon(seed, polygon) && isPlayableTerrainPoint(region, seed, mapWidth, mapHeight)) {
+    return seed;
+  }
+
+  return randomPlayablePointInPolygon(polygon, rng.fork("safe-center"), region, mapWidth, mapHeight);
+}
+
+function randomPlayablePointInPolygon(
+  polygon: Point[],
+  rng: SeededRandom,
+  region: MapRegion,
+  mapWidth: number,
+  mapHeight: number
+): Point {
+  const bounds = polygonBounds(polygon);
+  let bestPoint: Point | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let attempt = 0; attempt < 180; attempt += 1) {
     const point = {
       x: rng.float(bounds.minX, bounds.maxX),
       y: rng.float(bounds.minY, bounds.maxY)
     };
+    if (!pointInPolygon(point, polygon)) {
+      continue;
+    }
 
-    if (pointInPolygon(point, landPart.polygon)) {
-      return point;
+    const score = getSettlementSuitability(region, point, mapWidth, mapHeight);
+    if (isPlayableTerrainPoint(region, point, mapWidth, mapHeight) && score > bestScore) {
+      bestScore = score;
+      bestPoint = point;
     }
   }
 
-  return null;
+  return bestPoint ?? randomPointInPolygonWithRng(polygon, rng);
+}
+
+function getSettlementSuitability(
+  region: MapRegion,
+  point: Point,
+  mapWidth: number,
+  mapHeight: number
+): number {
+  const terrain = region.terrain;
+  if (!terrain) {
+    return 1;
+  }
+
+  const column = Math.max(
+    0,
+    Math.min(terrain.width - 1, Math.floor((point.x / Math.max(1, mapWidth)) * terrain.width))
+  );
+  const row = Math.max(
+    0,
+    Math.min(terrain.height - 1, Math.floor((point.y / Math.max(1, mapHeight)) * terrain.height))
+  );
+  const index = row * terrain.width + column;
+  const biome = terrain.biomes[index] ?? "ocean";
+  const height = terrain.heights[index] ?? 0;
+  const moisture = terrain.moisture[index] ?? 0;
+  const temperature = terrain.temperature[index] ?? 0;
+  const biomeScore: Record<string, number> = {
+    plains: 1,
+    forest: 0.86,
+    wetland: 0.78,
+    coast: 0.72,
+    desert: 0.38,
+    mountain: 0.22,
+    snow: 0.12,
+    ocean: -3
+  };
+
+  return (
+    (biomeScore[biome] ?? 0.5) +
+    (1 - Math.abs(moisture - 0.58)) * 0.18 +
+    (1 - Math.abs(temperature - 0.58)) * 0.18 -
+    Math.max(0, height - 0.78) * 0.65 +
+    getRiverSettlementBonus(region, point, Math.min(mapWidth, mapHeight))
+  );
+}
+
+function isPlayableTerrainPoint(
+  region: MapRegion,
+  point: Point,
+  mapWidth: number,
+  mapHeight: number
+): boolean {
+  const terrain = region.terrain;
+  if (!terrain) {
+    return true;
+  }
+
+  const column = Math.max(
+    0,
+    Math.min(terrain.width - 1, Math.floor((point.x / Math.max(1, mapWidth)) * terrain.width))
+  );
+  const row = Math.max(
+    0,
+    Math.min(terrain.height - 1, Math.floor((point.y / Math.max(1, mapHeight)) * terrain.height))
+  );
+  return (terrain.biomes[row * terrain.width + column] ?? "ocean") !== "ocean";
+}
+
+function getRiverSettlementBonus(region: MapRegion, point: Point, mapScale: number): number {
+  const rivers = region.rivers ?? [];
+  if (rivers.length === 0) {
+    return 0;
+  }
+
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const river of rivers) {
+    for (let index = 0; index < river.points.length - 1; index += 1) {
+      nearestDistance = Math.min(
+        nearestDistance,
+        distanceToSegment(point, river.points[index], river.points[index + 1])
+      );
+    }
+  }
+
+  const influenceRadius = Math.max(28, mapScale * 0.075);
+  return Math.max(0, 1 - nearestDistance / influenceRadius) * 0.24;
 }
 
 function randomPointInPolygonWithRng(polygon: Point[], rng: SeededRandom): Point {
@@ -600,7 +926,7 @@ function getTargetMinArea(region: MapRegion): number {
     0
   );
   if (region.id === "fantasy") {
-    return Math.max(220, Math.min(420, (landArea * 0.28) / COUNTRY_COUNT));
+    return Math.max(110, Math.min(260, (landArea * 0.18) / COUNTRY_COUNT));
   }
   return Math.min(MIN_COUNTRY_AREA, (landArea * 0.2) / COUNTRY_COUNT);
 }

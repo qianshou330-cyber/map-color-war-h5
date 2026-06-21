@@ -15,9 +15,29 @@ import {
   getCountryPopulationCount,
   setCountryController
 } from "./state";
-import { killSoldier } from "./soldiers";
+import { killSoldier, normalizeSoldierStats, recordSoldierKill } from "./soldiers";
 
 type AttackKind = AttackTask["kind"];
+type CounterMetadata = Pick<
+  AttackTask,
+  "counterControllerCountryId" | "counterTargetControllerCountryId" | "counterRootTargetCountryId"
+>;
+type WarMetadata = Pick<
+  AttackTask,
+  | "warId"
+  | "originWarId"
+  | "rootTargetCountryId"
+  | "attackerControllerCountryId"
+  | "defenderControllerCountryId"
+>;
+type DamageCredit = {
+  damage: number;
+  lastHitAt: number;
+  sequence: number;
+};
+
+const soldierDamageCredits = new Map<string, Map<string, DamageCredit>>();
+let damageCreditSequence = 0;
 
 export function startAttack(
   state: GameState,
@@ -46,6 +66,15 @@ export function startAttack(
     selectAttackersFromCountry(state, countryId, targetCountry)
   );
   const existingAttack = findMergeableAttack(state, kind, targetCountryId, sourceTaskId);
+  const warMetadata = createWarMetadata(
+    state,
+    kind,
+    uniqueParticipantIds,
+    targetCountry,
+    sourceTaskId,
+    counterMetadata,
+    existingAttack
+  );
 
   if (attackers.length === 0) {
     if (kind !== "counter" || uniqueParticipantIds.length === 0) {
@@ -58,6 +87,7 @@ export function startAttack(
 
     const waitingCounterAttack: AttackTask = {
       id: createAttackId(kind),
+      ...warMetadata,
       sourceTaskId,
       kind,
       ...counterMetadata,
@@ -105,6 +135,7 @@ export function startAttack(
       existingAttack.targetCountryId
     );
     Object.assign(existingAttack, counterMetadata);
+    ensureAttackHasWarMetadata(existingAttack, warMetadata);
 
     if (kind === "attack") {
       ensureCounterAttackTask(state, existingAttack, now);
@@ -115,6 +146,7 @@ export function startAttack(
 
   const attack: AttackTask = {
     id: createAttackId(kind),
+    ...warMetadata,
     sourceTaskId,
     kind,
     ...counterMetadata,
@@ -142,10 +174,7 @@ function createCounterMetadata(
   participantCountryIds: number[],
   targetCountry: Country,
   sourceTaskId?: string
-): Pick<
-  AttackTask,
-  "counterControllerCountryId" | "counterTargetControllerCountryId" | "counterRootTargetCountryId"
-> {
+): CounterMetadata {
   if (kind !== "counter") {
     return {};
   }
@@ -165,7 +194,62 @@ function createCounterMetadata(
   };
 }
 
+function createWarMetadata(
+  state: GameState,
+  kind: AttackKind,
+  participantCountryIds: number[],
+  targetCountry: Country,
+  sourceTaskId: string | undefined,
+  counterMetadata: CounterMetadata,
+  existingAttack?: AttackTask
+): WarMetadata {
+  if (existingAttack) {
+    return {
+      warId: existingAttack.warId,
+      originWarId: existingAttack.originWarId,
+      rootTargetCountryId: existingAttack.rootTargetCountryId,
+      attackerControllerCountryId: existingAttack.attackerControllerCountryId,
+      defenderControllerCountryId: existingAttack.defenderControllerCountryId
+    };
+  }
+
+  const sourceAttack = sourceTaskId
+    ? state.activeAttacks.find((attack) => attack.id === sourceTaskId)
+    : undefined;
+  const warId = createWarId(kind);
+  const attackerControllerCountryId =
+    kind === "counter"
+      ? (counterMetadata.counterControllerCountryId ??
+        getNearestParticipantControllerCountryId(state, participantCountryIds, targetCountry.id))
+      : getNearestParticipantControllerCountryId(state, participantCountryIds, targetCountry.id);
+  const defenderControllerCountryId =
+    kind === "counter"
+      ? (counterMetadata.counterTargetControllerCountryId ?? targetCountry.controllerCountryId)
+      : targetCountry.controllerCountryId;
+
+  return {
+    warId,
+    originWarId: kind === "counter" ? (sourceAttack?.originWarId ?? sourceAttack?.warId ?? warId) : warId,
+    rootTargetCountryId:
+      kind === "counter"
+        ? (sourceAttack?.rootTargetCountryId ?? sourceAttack?.targetCountryId ?? targetCountry.id)
+        : targetCountry.id,
+    attackerControllerCountryId,
+    defenderControllerCountryId
+  };
+}
+
+function ensureAttackHasWarMetadata(attack: AttackTask, metadata: WarMetadata): void {
+  attack.warId ||= metadata.warId;
+  attack.originWarId ||= metadata.originWarId;
+  attack.rootTargetCountryId ||= metadata.rootTargetCountryId;
+  attack.attackerControllerCountryId ||= metadata.attackerControllerCountryId;
+  attack.defenderControllerCountryId ||= metadata.defenderControllerCountryId;
+}
+
 export function updateBattle(state: GameState, now: number): void {
+  pruneDamageCredits(state);
+
   for (const attack of [...state.activeAttacks]) {
     if (!state.activeAttacks.includes(attack)) {
       continue;
@@ -181,32 +265,47 @@ export function updateBattle(state: GameState, now: number): void {
   cleanupOrphanCounters(state);
 }
 
+function pruneDamageCredits(state: GameState): void {
+  const knownSoldierIds = new Set([
+    ...state.soldiers.map((soldier) => soldier.id),
+    ...state.deadSoldiers.map((dead) => dead.soldier.id)
+  ]);
+
+  for (const targetSoldierId of [...soldierDamageCredits.keys()]) {
+    if (!knownSoldierIds.has(targetSoldierId)) {
+      soldierDamageCredits.delete(targetSoldierId);
+      continue;
+    }
+
+    const credits = soldierDamageCredits.get(targetSoldierId);
+    if (!credits) {
+      continue;
+    }
+
+    for (const attackerSoldierId of [...credits.keys()]) {
+      if (!knownSoldierIds.has(attackerSoldierId)) {
+        credits.delete(attackerSoldierId);
+      }
+    }
+
+    if (credits.size === 0) {
+      soldierDamageCredits.delete(targetSoldierId);
+    }
+  }
+}
+
 export function hasAttackAgainstTarget(
   state: GameState,
   targetCountryId: number,
   participantCountryIds?: number[],
   controllerCountryId?: number | null
 ): boolean {
-  return state.activeAttacks.some(
-    (attack) => {
-      if (
-        attack.kind === "attack" &&
-        attack.targetCountryId === targetCountryId &&
-        (!participantCountryIds ||
-          attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
-      ) {
-        return true;
-      }
-
-      return (
-        attack.kind === "counter" &&
-        attack.counterRootTargetCountryId === targetCountryId &&
-        (controllerCountryId === undefined ||
-          controllerCountryId === null ||
-          attack.counterTargetControllerCountryId === controllerCountryId)
-      );
-    }
-  );
+  return getOriginWarIdsForTarget(
+    state,
+    targetCountryId,
+    participantCountryIds,
+    controllerCountryId
+  ).size > 0;
 }
 
 export function stopAttack(
@@ -215,37 +314,59 @@ export function stopAttack(
   participantCountryIds?: number[],
   controllerCountryId?: number | null
 ): boolean {
-  const attacks = state.activeAttacks.filter(
-    (attack) => {
-      if (
-        attack.kind === "attack" &&
-        attack.targetCountryId === targetCountryId &&
-        (!participantCountryIds ||
-          attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId)))
-      ) {
-        return true;
-      }
-
-      return (
-        attack.kind === "counter" &&
-        attack.counterRootTargetCountryId === targetCountryId &&
-        (controllerCountryId === undefined ||
-          controllerCountryId === null ||
-          attack.counterTargetControllerCountryId === controllerCountryId)
-      );
-    }
+  const originWarIds = getOriginWarIdsForTarget(
+    state,
+    targetCountryId,
+    participantCountryIds,
+    controllerCountryId
   );
-  if (attacks.length === 0) {
+  if (originWarIds.size === 0) {
     return false;
   }
 
-  for (const attack of attacks) {
-    removeAttackTask(state, attack, true);
-    stopCounterAttacksFor(state, attack.id);
+  for (const originWarId of originWarIds) {
+    removeAttackChainByOriginWarId(state, originWarId, true);
   }
 
   cleanupOrphanCounters(state);
   return true;
+}
+
+function getOriginWarIdsForTarget(
+  state: GameState,
+  targetCountryId: number,
+  participantCountryIds?: number[],
+  controllerCountryId?: number | null
+): Set<string> {
+  const originWarIds = new Set<string>();
+  for (const attack of state.activeAttacks) {
+    const participantMatches =
+      !participantCountryIds ||
+      attack.participantCountryIds.some((countryId) => participantCountryIds.includes(countryId));
+    const controllerMatches =
+      controllerCountryId === undefined ||
+      controllerCountryId === null ||
+      attack.defenderControllerCountryId === controllerCountryId ||
+      attack.counterTargetControllerCountryId === controllerCountryId;
+    const directAttackMatches =
+      attack.kind === "attack" &&
+      attack.targetCountryId === targetCountryId &&
+      participantMatches;
+    const rootWarMatches =
+      attack.rootTargetCountryId === targetCountryId &&
+      controllerMatches &&
+      (attack.kind === "counter" || participantMatches);
+    const legacyCounterMatches =
+      attack.kind === "counter" &&
+      attack.counterRootTargetCountryId === targetCountryId &&
+      controllerMatches;
+
+    if (directAttackMatches || rootWarMatches || legacyCounterMatches) {
+      originWarIds.add(attack.originWarId);
+    }
+  }
+
+  return originWarIds;
 }
 
 export function removeAttackParticipant(
@@ -276,7 +397,7 @@ export function removeAttackParticipant(
     if (attack.participantCountryIds.length === 0 || attack.attackerSoldierIds.length === 0) {
       removeAttackTask(state, attack, false);
       if (attack.kind === "attack") {
-        stopCounterAttacksFor(state, attack.id);
+        stopCounterAttacksForOriginWar(state, attack.originWarId);
       }
       stopped = true;
       continue;
@@ -506,21 +627,48 @@ function resolveBattleTick(state: GameState, attack: AttackTask, now: number): v
     return;
   }
 
-  const defenderLosses = Math.min(defenders.length, Math.max(1, Math.ceil(attackers.length * 0.45)));
-  const attackerLosses = Math.min(attackers.length, Math.max(1, Math.ceil(defenders.length * 0.35)));
+  const aliveSoldiersById = new Map(state.soldiers.map((soldier) => [soldier.id, soldier]));
+  const damageByTarget = new Map<string, { target: Soldier; damage: number }>();
 
-  for (const defender of defenders.slice(0, defenderLosses)) {
-    killSoldier(state, defender, now);
+  queueGroupDamage(attackers, defenders, damageByTarget, now);
+  queueGroupDamage(defenders, attackers, damageByTarget, now);
+
+  for (const { target, damage } of damageByTarget.values()) {
+    if (!target.alive) {
+      continue;
+    }
+    normalizeSoldierStats(target);
+    target.hp = Math.max(0, target.hp - damage);
   }
 
-  for (const attacker of attackers.slice(0, attackerLosses)) {
-    paintProvinceAtPoint(
-      state,
-      attack.targetCountryId,
-      { x: attacker.x, y: attacker.y },
-      attack.conquerorCountryId
-    );
-    killSoldier(state, attacker, now);
+  const deadSoldiers = [...damageByTarget.values()]
+    .map((entry) => entry.target)
+    .filter((soldier, index, list) => soldier.hp <= 0 && list.findIndex((item) => item.id === soldier.id) === index);
+  const attackerIds = new Set(attackers.map((soldier) => soldier.id));
+
+  for (const deadSoldier of deadSoldiers) {
+    const killer = getTopDamageDealer(deadSoldier.id, aliveSoldiersById);
+    if (killer) {
+      recordSoldierKill(killer, now);
+    }
+  }
+
+  for (const deadSoldier of deadSoldiers) {
+    if (!deadSoldier.alive) {
+      continue;
+    }
+
+    if (attackerIds.has(deadSoldier.id)) {
+      paintProvinceAtPoint(
+        state,
+        attack.targetCountryId,
+        { x: deadSoldier.x, y: deadSoldier.y },
+        attack.conquerorCountryId
+      );
+    }
+
+    killSoldier(state, deadSoldier, now);
+    clearDamageCreditsForDeadSoldier(deadSoldier.id);
   }
 
   const targetCountry = getCountry(state, attack.targetCountryId);
@@ -531,6 +679,110 @@ function resolveBattleTick(state: GameState, attack: AttackTask, now: number): v
   } else if (getAttackers(state, attack).length === 0) {
     attack.phase = "moving";
     releaseDefenders(state, attack);
+  }
+}
+
+function queueGroupDamage(
+  attackers: Soldier[],
+  targets: Soldier[],
+  damageByTarget: Map<string, { target: Soldier; damage: number }>,
+  now: number
+): void {
+  if (targets.length === 0) {
+    return;
+  }
+
+  for (const attacker of attackers) {
+    if (!attacker.alive) {
+      continue;
+    }
+
+    normalizeSoldierStats(attacker);
+    const target = selectCombatTarget(attacker, targets);
+    if (!target) {
+      continue;
+    }
+
+    const damage = attacker.attackPower;
+    const queued = damageByTarget.get(target.id);
+    if (queued) {
+      queued.damage += damage;
+    } else {
+      damageByTarget.set(target.id, { target, damage });
+    }
+    recordDamageCredit(target.id, attacker.id, damage, now);
+  }
+}
+
+function selectCombatTarget(attacker: Soldier, targets: Soldier[]): Soldier | null {
+  return [...targets]
+    .filter((target) => target.alive)
+    .sort((left, right) => {
+      const leftDistance = distance({ x: attacker.x, y: attacker.y }, { x: left.x, y: left.y });
+      const rightDistance = distance({ x: attacker.x, y: attacker.y }, { x: right.x, y: right.y });
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+      if (left.hp !== right.hp) {
+        return left.hp - right.hp;
+      }
+      return left.id.localeCompare(right.id);
+    })[0] ?? null;
+}
+
+function recordDamageCredit(
+  targetSoldierId: string,
+  attackerSoldierId: string,
+  damage: number,
+  now: number
+): void {
+  let targetCredits = soldierDamageCredits.get(targetSoldierId);
+  if (!targetCredits) {
+    targetCredits = new Map();
+    soldierDamageCredits.set(targetSoldierId, targetCredits);
+  }
+
+  const previous = targetCredits.get(attackerSoldierId);
+  targetCredits.set(attackerSoldierId, {
+    damage: (previous?.damage ?? 0) + damage,
+    lastHitAt: now,
+    sequence: ++damageCreditSequence
+  });
+}
+
+function getTopDamageDealer(
+  targetSoldierId: string,
+  aliveSoldiersById: Map<string, Soldier>
+): Soldier | null {
+  const targetCredits = soldierDamageCredits.get(targetSoldierId);
+  if (!targetCredits) {
+    return null;
+  }
+
+  const topCredit = [...targetCredits.entries()]
+    .filter(([attackerId]) => aliveSoldiersById.has(attackerId))
+    .sort((left, right) => {
+      const leftCredit = left[1];
+      const rightCredit = right[1];
+      if (leftCredit.damage !== rightCredit.damage) {
+        return rightCredit.damage - leftCredit.damage;
+      }
+      if (leftCredit.lastHitAt !== rightCredit.lastHitAt) {
+        return rightCredit.lastHitAt - leftCredit.lastHitAt;
+      }
+      if (leftCredit.sequence !== rightCredit.sequence) {
+        return rightCredit.sequence - leftCredit.sequence;
+      }
+      return left[0].localeCompare(right[0]);
+    })[0];
+
+  return topCredit ? aliveSoldiersById.get(topCredit[0]) ?? null : null;
+}
+
+function clearDamageCreditsForDeadSoldier(soldierId: string): void {
+  soldierDamageCredits.delete(soldierId);
+  for (const targetCredits of soldierDamageCredits.values()) {
+    targetCredits.delete(soldierId);
   }
 }
 
@@ -579,8 +831,9 @@ function annexTarget(state: GameState, attack: AttackTask): void {
     return;
   }
 
+  const originWarId = attack.originWarId;
   removeAttackTask(state, attack, false);
-  stopCounterAttacksFor(state, attack.id);
+  stopCounterAttacksForOriginWar(state, originWarId);
   cancelAttacksForCountry(state, targetCountry.id);
   cleanupOrphanCounters(state);
   joinOngoingAttacksFromNewCountry(state, targetCountry, attack.conquerorCountryId);
@@ -955,6 +1208,35 @@ function stopCounterAttacksFor(
   }
 }
 
+function stopCounterAttacksForOriginWar(
+  state: GameState,
+  originWarId: string,
+  excludedAttackIds = new Set<string>()
+): void {
+  for (const counter of state.activeAttacks.filter(
+    (attack) => attack.kind === "counter" && attack.originWarId === originWarId
+  )) {
+    if (excludedAttackIds.has(counter.id)) {
+      continue;
+    }
+    removeAttackTask(state, counter, true);
+  }
+}
+
+function removeAttackChainByOriginWarId(
+  state: GameState,
+  originWarId: string,
+  returnAttackers: boolean,
+  excludedAttackIds = new Set<string>()
+): void {
+  for (const attack of [...state.activeAttacks]) {
+    if (attack.originWarId !== originWarId || excludedAttackIds.has(attack.id)) {
+      continue;
+    }
+    removeAttackTask(state, attack, returnAttackers);
+  }
+}
+
 export function cancelAttacksForCountry(
   state: GameState,
   countryId: number,
@@ -966,9 +1248,10 @@ export function cancelAttacksForCountry(
     }
 
     if (attack.targetCountryId === countryId || attack.participantCountryIds.includes(countryId)) {
-      removeAttackTask(state, attack, true);
       if (attack.kind === "attack") {
-        stopCounterAttacksFor(state, attack.id, excludedAttackIds);
+        removeAttackChainByOriginWarId(state, attack.originWarId, true, excludedAttackIds);
+      } else {
+        removeAttackTask(state, attack, true);
       }
     }
   }
@@ -1012,4 +1295,9 @@ function getSoldierControllerCountryId(state: GameState, soldier: Soldier): numb
 
 function createAttackId(kind: AttackKind): string {
   return `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createWarId(kind: AttackKind): string {
+  const prefix = kind === "counter" ? "counter-war" : "war";
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

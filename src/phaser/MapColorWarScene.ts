@@ -156,6 +156,7 @@ export class MapColorWarScene extends Phaser.Scene {
       this.drawCountry(country);
     }
 
+    this.drawFactionOuterBorders();
     this.drawRivers();
     this.drawRegionOutline();
   }
@@ -184,7 +185,55 @@ export class MapColorWarScene extends Phaser.Scene {
       }
     }
 
+    this.drawTerrainOverlays();
     this.lastTerrainSignature = this.getTerrainSignature();
+  }
+
+  private drawTerrainOverlays(): void {
+    const terrain = this.state.region.terrain;
+    if (!terrain) {
+      return;
+    }
+
+    for (const contour of terrain.contours ?? []) {
+      if (contour.length < 2) {
+        continue;
+      }
+      this.terrainGraphics.lineStyle(0.65, 0xf3ead0, this.getMapViewMode() === "terrain" ? 0.16 : 0.08);
+      this.strokePolyline(this.terrainGraphics, contour);
+    }
+
+    for (const ridge of terrain.mountainRidges ?? []) {
+      if (ridge.length < 2) {
+        continue;
+      }
+      this.terrainGraphics.lineStyle(2.4, 0x2a2b2f, this.getMapViewMode() === "terrain" ? 0.32 : 0.18);
+      this.strokePolyline(this.terrainGraphics, ridge);
+      this.terrainGraphics.lineStyle(0.95, 0xd7d1bf, this.getMapViewMode() === "terrain" ? 0.44 : 0.22);
+      this.strokePolyline(this.terrainGraphics, ridge);
+    }
+
+    for (const coastline of terrain.coastline ?? []) {
+      if (coastline.length < 3) {
+        continue;
+      }
+      this.terrainGraphics.lineStyle(2.6, 0x072031, 0.34);
+      this.terrainGraphics.strokePoints(coastline, true);
+      this.terrainGraphics.lineStyle(1.1, 0x82dff2, this.getMapViewMode() === "terrain" ? 0.52 : 0.32);
+      this.terrainGraphics.strokePoints(coastline, true);
+    }
+  }
+
+  private strokePolyline(graphics: Phaser.GameObjects.Graphics, points: Point[]): void {
+    graphics.beginPath();
+    points.forEach((point, index) => {
+      if (index === 0) {
+        graphics.moveTo(point.x, point.y);
+      } else {
+        graphics.lineTo(point.x, point.y);
+      }
+    });
+    graphics.strokePath();
   }
 
   private drawRegionBase(): void {
@@ -245,30 +294,50 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private drawCountry(country: Country): void {
-    const isPlayerControlled = this.isPlayerControlledGroup(country.controllerCountryId, [country]);
-    const strokeColor = isPlayerControlled ? PLAYER_STROKE_COLOR : NEUTRAL_STROKE_COLOR;
     const countryPath = new Phaser.Geom.Polygon(country.polygon);
     const controllerColor = getCountryColorById(this.state, country.controllerCountryId) ?? country.color;
 
-    this.countryGraphics.fillStyle(controllerColor, 0.98);
+    this.countryGraphics.fillStyle(controllerColor, this.getCountryFillAlpha());
     this.countryGraphics.fillPoints(countryPath.points, true);
 
     for (const province of country.provinces) {
       const provincePath = new Phaser.Geom.Polygon(province.polygon);
       const isContestedProvince = province.paintCountryId !== country.controllerCountryId;
       if (isContestedProvince) {
-        this.countryGraphics.fillStyle(getProvinceColor(this.state, country, province), 0.96);
+        this.countryGraphics.fillStyle(
+          getProvinceColor(this.state, country, province),
+          this.getContestedProvinceFillAlpha()
+        );
         this.countryGraphics.fillPoints(provincePath.points, true);
       }
-      this.countryGraphics.lineStyle(0.45, 0xffffff, isContestedProvince ? 0.16 : 0.06);
+      this.countryGraphics.lineStyle(
+        0.45,
+        0xffffff,
+        isContestedProvince ? 0.16 : this.getProvinceLineAlpha()
+      );
       this.countryGraphics.strokePoints(provincePath.points, true);
     }
-
-    this.drawVisibleCountryBorders(country, strokeColor, isPlayerControlled ? 3 : 1.65);
   }
 
-  private drawVisibleCountryBorders(country: Country, strokeColor: number, width: number): void {
-    this.countryGraphics.lineStyle(width, strokeColor, 1);
+  private drawFactionOuterBorders(): void {
+    this.drawFactionBorderPass(4.8, 0x06101f, 0.9);
+
+    for (const country of this.state.countries) {
+      const isPlayerControlled = this.isPlayerControlledGroup(country.controllerCountryId, [country]);
+      const strokeColor = isPlayerControlled ? PLAYER_STROKE_COLOR : NEUTRAL_STROKE_COLOR;
+      this.countryGraphics.lineStyle(isPlayerControlled ? 2.35 : 1.65, strokeColor, isPlayerControlled ? 0.95 : 0.72);
+      this.strokeFactionBorderEdges(country);
+    }
+  }
+
+  private drawFactionBorderPass(width: number, color: number, alpha: number): void {
+    this.countryGraphics.lineStyle(width, color, alpha);
+    for (const country of this.state.countries) {
+      this.strokeFactionBorderEdges(country);
+    }
+  }
+
+  private strokeFactionBorderEdges(country: Country): void {
     for (let index = 0; index < country.polygon.length; index += 1) {
       const start = country.polygon[index];
       const end = country.polygon[(index + 1) % country.polygon.length];
@@ -728,7 +797,8 @@ export class MapColorWarScene extends Phaser.Scene {
   private drawSoldier(soldier: Soldier, renderPoint: Point): void {
     const color = getSoldierColor(this.state, soldier);
     const active = soldier.status === "attacking" || soldier.status === "fighting";
-    const size = SOLDIER_RADIUS * 2;
+    const isMinotaur = soldier.rank === "minotaur";
+    const size = SOLDIER_RADIUS * 2 + (isMinotaur ? 1 : 0);
     const x = renderPoint.x - size / 2;
     const y = renderPoint.y - size / 2;
 
@@ -739,6 +809,10 @@ export class MapColorWarScene extends Phaser.Scene {
 
     this.soldierGraphics.fillStyle(color, soldier.status === "wandering" ? 0.88 : 0.98);
     this.soldierGraphics.fillRect(x, y, size, size);
+    if (isMinotaur) {
+      this.soldierGraphics.lineStyle(0.95, 0xf9c74f, 0.95);
+      this.soldierGraphics.strokeRect(x - 0.65, y - 0.65, size + 1.3, size + 1.3);
+    }
     this.soldierGraphics.lineStyle(0.65, 0x0b1724, soldier.status === "wandering" ? 0.5 : 0.82);
     this.soldierGraphics.strokeRect(x, y, size, size);
   }
@@ -832,9 +906,38 @@ export class MapColorWarScene extends Phaser.Scene {
       this.state.region.id,
       config?.seed ?? "",
       config?.worldType ?? "",
+      config?.temperature ?? "",
+      config?.mapViewMode ?? "",
       terrain?.width ?? 0,
-      terrain?.height ?? 0
+      terrain?.height ?? 0,
+      terrain?.coastline?.length ?? 0,
+      terrain?.mountainRidges?.length ?? 0,
+      terrain?.contours?.length ?? 0
     ].join(":");
+  }
+
+  private getMapViewMode(): "political" | "terrain" | "mixed" {
+    return this.state.region.generationConfig?.mapViewMode ?? "mixed";
+  }
+
+  private getCountryFillAlpha(): number {
+    switch (this.getMapViewMode()) {
+      case "terrain":
+        return 0.52;
+      case "political":
+        return 0.98;
+      case "mixed":
+      default:
+        return 0.82;
+    }
+  }
+
+  private getContestedProvinceFillAlpha(): number {
+    return this.getMapViewMode() === "terrain" ? 0.74 : 0.96;
+  }
+
+  private getProvinceLineAlpha(): number {
+    return this.getMapViewMode() === "terrain" ? 0.035 : 0.06;
   }
 
   private getBiomeColor(biome: Biome): number {
@@ -943,7 +1046,8 @@ export class MapColorWarScene extends Phaser.Scene {
     targetCountry: Country,
     visualState: RouteVisualState
   ): string {
-    return `${sourceCountry.displayCountryId} -> ${targetCountry.displayCountryId}｜${visualState.statusText}｜${visualState.soldierCount}兵｜阶段：${this.getPhaseText(attack)}`;
+    const warLabel = attack.originWarId.slice(-4).toUpperCase();
+    return `战线${warLabel}｜${sourceCountry.displayCountryId} -> ${targetCountry.displayCountryId}｜${visualState.statusText}｜${visualState.soldierCount}兵｜阶段：${this.getPhaseText(attack)}`;
   }
 
   private getPhaseText(attack: AttackTask): string {

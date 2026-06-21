@@ -10,7 +10,7 @@ import type {
   River,
   TerrainMap
 } from "../types";
-import { polygonArea } from "../utils/geometry";
+import { pointInPolygon, polygonArea } from "../utils/geometry";
 import { createSeededRandom, type SeededRandom } from "../utils/seededRandom";
 
 const TERRAIN_GRID_WIDTH = 160;
@@ -18,6 +18,14 @@ const TERRAIN_GRID_HEIGHT = 90;
 const LAND_POLYGON_STEPS = 48;
 const RIVER_TRACE_STEPS = 64;
 const MIN_TOTAL_PLAYABLE_LAND_AREA = 0.18;
+const HEIGHTMAP_LAND_GRID_WIDTH = 128;
+const HEIGHTMAP_LAND_GRID_HEIGHT = 72;
+
+type HeightGrid = {
+  width: number;
+  height: number;
+  values: number[];
+};
 
 type LandBlob = {
   id: string;
@@ -38,9 +46,11 @@ export function createDefaultMapGenerationConfig(
     seaLevel: 0.46,
     mountainStrength: 0.62,
     moisture: 0.56,
+    temperature: 0.58,
     riverCount: 8,
     countryCount: COUNTRY_COUNT,
     provincesPerCountry: PROVINCES_PER_COUNTRY,
+    mapViewMode: "mixed",
     ...partial
   });
 }
@@ -55,9 +65,11 @@ export function normalizeMapGenerationConfig(
     seaLevel: clampNumber(Number(partial.seaLevel ?? 0.46), 0.35, 0.6),
     mountainStrength: clampNumber(Number(partial.mountainStrength ?? 0.62), 0.15, 1),
     moisture: clampNumber(Number(partial.moisture ?? 0.56), 0.15, 1),
+    temperature: clampNumber(Number(partial.temperature ?? 0.58), 0.1, 1),
     riverCount: Math.round(clampNumber(Number(partial.riverCount ?? 8), 0, 20)),
     countryCount: COUNTRY_COUNT,
-    provincesPerCountry: PROVINCES_PER_COUNTRY
+    provincesPerCountry: PROVINCES_PER_COUNTRY,
+    mapViewMode: isMapViewMode(partial.mapViewMode) ? partial.mapViewMode : "mixed"
   };
 }
 
@@ -110,7 +122,7 @@ export function createFantasyRegion(
     landParts,
     outlinePolygons: landParts.map((part) => part.polygon),
     generationConfig,
-    terrain: createTerrainMap(width, height, generationConfig),
+    terrain: createTerrainMap(width, height, generationConfig, normalizedParts),
     rivers: createRivers(width, height, generationConfig)
   };
 }
@@ -132,17 +144,390 @@ export function getTerrainCell(terrain: TerrainMap, column: number, row: number)
 
 function createFantasyLandParts(config: MapGenerationConfig): Point[][] {
   const blobs = createLandBlobs(config);
-  const playableParts = filterPlayableLandParts(
+  const heightGrid = createHeightGrid(
+    HEIGHTMAP_LAND_GRID_WIDTH,
+    HEIGHTMAP_LAND_GRID_HEIGHT,
+    config,
     blobs
-    .filter((blob) => blob.asLandPart)
-      .map((blob) => createLandPolygon(blob, config, blobs)),
-    config
   );
+  const heightmapParts = extractLandPolygonsFromHeightGrid(heightGrid, config.seaLevel, config);
+  const terrainAlignedParts = filterTerrainAlignedLandParts(heightmapParts, heightGrid, config);
+  const playableParts = filterPlayableLandParts(terrainAlignedParts, config);
 
   const totalArea = playableParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
   return totalArea >= MIN_TOTAL_PLAYABLE_LAND_AREA
     ? playableParts
+    : createBlobFallbackLandParts(config, blobs, heightGrid);
+}
+
+function filterTerrainAlignedLandParts(
+  parts: Point[][],
+  heightGrid: HeightGrid,
+  config: MapGenerationConfig
+): Point[][] {
+  const minCoverage = config.worldType === "archipelago" ? 0.28 : 0.52;
+  return parts.filter((polygon) => getLandCoverageRatio(polygon, heightGrid, config.seaLevel) >= minCoverage);
+}
+
+function getLandCoverageRatio(polygon: Point[], heightGrid: HeightGrid, seaLevel: number): number {
+  let inside = 0;
+  let land = 0;
+
+  for (let row = 0; row < heightGrid.height; row += 1) {
+    for (let column = 0; column < heightGrid.width; column += 1) {
+      const point = {
+        x: (column + 0.5) / heightGrid.width,
+        y: (row + 0.5) / heightGrid.height
+      };
+      if (!pointInPolygon(point, polygon)) {
+        continue;
+      }
+
+      inside += 1;
+      if ((heightGrid.values[row * heightGrid.width + column] ?? 0) >= seaLevel) {
+        land += 1;
+      }
+    }
+  }
+
+  return inside === 0 ? 0 : land / inside;
+}
+
+function createBlobFallbackLandParts(
+  config: MapGenerationConfig,
+  blobs: LandBlob[],
+  heightGrid: HeightGrid
+): Point[][] {
+  const blobParts = blobs
+    .filter((blob) => blob.asLandPart)
+    .map((blob) => createLandPolygon(blob, config, blobs));
+  const playableParts = filterPlayableLandParts(
+    filterTerrainAlignedLandParts(blobParts, heightGrid, config),
+    config
+  );
+  const totalArea = playableParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
+  if (totalArea >= MIN_TOTAL_PLAYABLE_LAND_AREA) {
+    return playableParts;
+  }
+
+  const areaOnlyParts = filterPlayableLandParts(blobParts, config);
+  const areaOnlyTotal = areaOnlyParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
+  return areaOnlyTotal >= MIN_TOTAL_PLAYABLE_LAND_AREA
+    ? areaOnlyParts
     : createFallbackContinent(config);
+}
+
+function createHeightGrid(
+  width: number,
+  height: number,
+  config: MapGenerationConfig,
+  blobs: LandBlob[]
+): HeightGrid {
+  const values: number[] = [];
+
+  for (let row = 0; row < height; row += 1) {
+    for (let column = 0; column < width; column += 1) {
+      values.push(heightAt((column + 0.5) / width, (row + 0.5) / height, config, blobs));
+    }
+  }
+
+  return {
+    width,
+    height,
+    values
+  };
+}
+
+function extractLandPolygonsFromHeightGrid(
+  grid: HeightGrid,
+  seaLevel: number,
+  config: MapGenerationConfig
+): Point[][] {
+  const land = grid.values.map((heightValue) => heightValue >= seaLevel);
+  const visited = new Set<number>();
+  const polygons: Point[][] = [];
+
+  for (let row = 0; row < grid.height; row += 1) {
+    for (let column = 0; column < grid.width; column += 1) {
+      const index = row * grid.width + column;
+      if (!land[index] || visited.has(index)) {
+        continue;
+      }
+
+      const component = collectLandComponent(column, row, grid, land, visited);
+      const loops = traceComponentBoundaryLoops(component, grid);
+      const largestLoop = loops
+        .map((loop) => cleanContourPolygon(loop, config))
+        .filter((loop) => loop.length >= 8)
+        .sort((left, right) => polygonArea(right) - polygonArea(left))[0];
+
+      if (largestLoop) {
+        polygons.push(largestLoop);
+      }
+    }
+  }
+
+  return polygons.sort((left, right) => polygonArea(right) - polygonArea(left));
+}
+
+function collectLandComponent(
+  startColumn: number,
+  startRow: number,
+  grid: HeightGrid,
+  land: boolean[],
+  visited: Set<number>
+): Array<{ column: number; row: number }> {
+  const stack = [{ column: startColumn, row: startRow }];
+  const component: Array<{ column: number; row: number }> = [];
+
+  while (stack.length > 0) {
+    const cell = stack.pop();
+    if (!cell) {
+      continue;
+    }
+
+    if (
+      cell.column < 0 ||
+      cell.column >= grid.width ||
+      cell.row < 0 ||
+      cell.row >= grid.height
+    ) {
+      continue;
+    }
+
+    const index = cell.row * grid.width + cell.column;
+    if (!land[index] || visited.has(index)) {
+      continue;
+    }
+
+    visited.add(index);
+    component.push(cell);
+    stack.push(
+      { column: cell.column + 1, row: cell.row },
+      { column: cell.column - 1, row: cell.row },
+      { column: cell.column, row: cell.row + 1 },
+      { column: cell.column, row: cell.row - 1 }
+    );
+  }
+
+  return component;
+}
+
+function traceComponentBoundaryLoops(
+  component: Array<{ column: number; row: number }>,
+  grid: HeightGrid
+): Point[][] {
+  const cells = new Set(component.map((cell) => cellKey(cell.column, cell.row)));
+  const edgeMap = new Map<string, Array<{ start: Point; end: Point }>>();
+
+  for (const cell of component) {
+    const { column, row } = cell;
+    addBoundaryEdgeIfWater(cells, edgeMap, grid, column, row, column, row - 1, {
+      start: gridVertex(column, row, grid),
+      end: gridVertex(column + 1, row, grid)
+    });
+    addBoundaryEdgeIfWater(cells, edgeMap, grid, column, row, column + 1, row, {
+      start: gridVertex(column + 1, row, grid),
+      end: gridVertex(column + 1, row + 1, grid)
+    });
+    addBoundaryEdgeIfWater(cells, edgeMap, grid, column, row, column, row + 1, {
+      start: gridVertex(column + 1, row + 1, grid),
+      end: gridVertex(column, row + 1, grid)
+    });
+    addBoundaryEdgeIfWater(cells, edgeMap, grid, column, row, column - 1, row, {
+      start: gridVertex(column, row + 1, grid),
+      end: gridVertex(column, row, grid)
+    });
+  }
+
+  const loops: Point[][] = [];
+  while (edgeMap.size > 0) {
+    const firstKey = edgeMap.keys().next().value as string | undefined;
+    if (!firstKey) {
+      break;
+    }
+
+    const firstEdge = shiftEdge(edgeMap, firstKey);
+    if (!firstEdge) {
+      continue;
+    }
+
+    const loop: Point[] = [firstEdge.start];
+    let current = firstEdge.end;
+    const startKey = pointKey(firstEdge.start);
+    let guard = 0;
+
+    while (pointKey(current) !== startKey && guard < component.length * 8 + 32) {
+      loop.push(current);
+      const nextEdge = shiftEdge(edgeMap, pointKey(current));
+      if (!nextEdge) {
+        break;
+      }
+      current = nextEdge.end;
+      guard += 1;
+    }
+
+    if (loop.length >= 4) {
+      loops.push(removeAdjacentDuplicatePoints(loop));
+    }
+  }
+
+  return loops;
+}
+
+function addBoundaryEdgeIfWater(
+  cells: Set<string>,
+  edgeMap: Map<string, Array<{ start: Point; end: Point }>>,
+  grid: HeightGrid,
+  _column: number,
+  _row: number,
+  neighborColumn: number,
+  neighborRow: number,
+  edge: { start: Point; end: Point }
+): void {
+  const neighborInGrid =
+    neighborColumn >= 0 &&
+    neighborColumn < grid.width &&
+    neighborRow >= 0 &&
+    neighborRow < grid.height;
+
+  if (neighborInGrid && cells.has(cellKey(neighborColumn, neighborRow))) {
+    return;
+  }
+
+  const startKey = pointKey(edge.start);
+  const bucket = edgeMap.get(startKey) ?? [];
+  bucket.push(edge);
+  edgeMap.set(startKey, bucket);
+}
+
+function shiftEdge(
+  edgeMap: Map<string, Array<{ start: Point; end: Point }>>,
+  key: string
+): { start: Point; end: Point } | undefined {
+  const bucket = edgeMap.get(key);
+  if (!bucket || bucket.length === 0) {
+    edgeMap.delete(key);
+    return undefined;
+  }
+
+  const edge = bucket.shift();
+  if (bucket.length === 0) {
+    edgeMap.delete(key);
+  }
+  return edge;
+}
+
+function cleanContourPolygon(polygon: Point[], config: MapGenerationConfig): Point[] {
+  const withoutDuplicates = removeAdjacentDuplicatePoints(polygon);
+  const withoutCollinear = removeCollinearPoints(withoutDuplicates);
+  const smoothed = smoothClosedPolygon(
+    withoutCollinear,
+    config.worldType === "archipelago" ? 1 : 2
+  );
+  return simplifyPolygon(removeCollinearPoints(smoothed), 0.0038).map((point) => ({
+    x: clamp01(point.x),
+    y: clamp01(point.y)
+  }));
+}
+
+function removeAdjacentDuplicatePoints(points: Point[]): Point[] {
+  const result: Point[] = [];
+  for (const point of points) {
+    const previous = result[result.length - 1];
+    if (!previous || distanceSq(previous, point) > 0.0000005) {
+      result.push(point);
+    }
+  }
+
+  if (result.length > 1 && distanceSq(result[0], result[result.length - 1]) <= 0.0000005) {
+    result.pop();
+  }
+  return result;
+}
+
+function removeCollinearPoints(points: Point[]): Point[] {
+  if (points.length <= 3) {
+    return points;
+  }
+
+  return points.filter((point, index) => {
+    const previous = points[(index - 1 + points.length) % points.length];
+    const next = points[(index + 1) % points.length];
+    const cross =
+      (point.x - previous.x) * (next.y - point.y) -
+      (point.y - previous.y) * (next.x - point.x);
+    return Math.abs(cross) > 0.00001;
+  });
+}
+
+function smoothClosedPolygon(points: Point[], iterations: number): Point[] {
+  let result = points;
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    if (result.length < 4) {
+      return result;
+    }
+
+    const next: Point[] = [];
+    for (let index = 0; index < result.length; index += 1) {
+      const current = result[index];
+      const following = result[(index + 1) % result.length];
+      next.push(
+        {
+          x: current.x * 0.74 + following.x * 0.26,
+          y: current.y * 0.74 + following.y * 0.26
+        },
+        {
+          x: current.x * 0.26 + following.x * 0.74,
+          y: current.y * 0.26 + following.y * 0.74
+        }
+      );
+    }
+    result = next;
+  }
+  return result;
+}
+
+function simplifyPolygon(points: Point[], tolerance: number): Point[] {
+  if (points.length <= 16) {
+    return points;
+  }
+
+  const result = points.filter((point, index) => {
+    const previous = points[(index - 1 + points.length) % points.length];
+    const next = points[(index + 1) % points.length];
+    return distanceToLine(point, previous, next) >= tolerance || index % 3 === 0;
+  });
+
+  return result.length >= 8 ? result : points;
+}
+
+function distanceToLine(point: Point, start: Point, end: Point): number {
+  const length = Math.sqrt(distanceSq(start, end));
+  if (length < 0.000001) {
+    return Math.sqrt(distanceSq(point, start));
+  }
+
+  return Math.abs(
+    ((end.x - start.x) * (start.y - point.y) -
+      (start.x - point.x) * (end.y - start.y)) /
+      length
+  );
+}
+
+function cellKey(column: number, row: number): string {
+  return `${column}:${row}`;
+}
+
+function gridVertex(column: number, row: number, grid: HeightGrid): Point {
+  return {
+    x: column / grid.width,
+    y: row / grid.height
+  };
+}
+
+function pointKey(point: Point): string {
+  return `${Math.round(point.x * 100000)}:${Math.round(point.y * 100000)}`;
 }
 
 function filterPlayableLandParts(parts: Point[][], config: MapGenerationConfig): Point[][] {
@@ -321,8 +706,14 @@ function createLandPolygon(blob: LandBlob, config: MapGenerationConfig, blobs: L
   return polygon;
 }
 
-function createTerrainMap(width: number, height: number, config: MapGenerationConfig): TerrainMap {
+function createTerrainMap(
+  width: number,
+  height: number,
+  config: MapGenerationConfig,
+  landMask: Point[][] = []
+): TerrainMap {
   const blobs = createLandBlobs(config);
+  const heightGrid = createHeightGrid(TERRAIN_GRID_WIDTH, TERRAIN_GRID_HEIGHT, config, blobs);
   const heights: number[] = [];
   const moisture: number[] = [];
   const temperature: number[] = [];
@@ -332,7 +723,12 @@ function createTerrainMap(width: number, height: number, config: MapGenerationCo
     for (let column = 0; column < TERRAIN_GRID_WIDTH; column += 1) {
       const x = (column + 0.5) / TERRAIN_GRID_WIDTH;
       const y = (row + 0.5) / TERRAIN_GRID_HEIGHT;
-      const heightValue = heightAt(x, y, config, blobs);
+      const rawHeightValue = heightGrid.values[row * TERRAIN_GRID_WIDTH + column] ?? 0;
+      const heightValue =
+        landMask.length > 0 && landMask.some((polygon) => pointInPolygon({ x, y }, polygon))
+          ? Math.max(rawHeightValue, config.seaLevel + 0.018)
+          : rawHeightValue;
+      heightGrid.values[row * TERRAIN_GRID_WIDTH + column] = heightValue;
       const moistureValue = moistureAt(x, y, heightValue, config);
       const temperatureValue = temperatureAt(x, y, heightValue, config);
       heights.push(round3(heightValue));
@@ -348,8 +744,115 @@ function createTerrainMap(width: number, height: number, config: MapGenerationCo
     heights,
     moisture,
     temperature,
-    biomes
+    biomes,
+    coastline: extractLandPolygonsFromHeightGrid(heightGrid, config.seaLevel, config).map((polygon) =>
+      scalePolygon(polygon, width, height)
+    ),
+    mountainRidges: createMountainRidges(width, height, heightGrid, biomes, config),
+    contours: createHeightContours(width, height, heightGrid, config),
+    riverBasins: []
   };
+}
+
+function createMountainRidges(
+  width: number,
+  height: number,
+  heightGrid: HeightGrid,
+  biomes: Biome[],
+  config: MapGenerationConfig
+): Point[][] {
+  const rng = createSeededRandom(`${config.seed}:mountain-ridges`);
+  const ridges: Point[][] = [];
+  const threshold = Math.max(config.seaLevel + 0.22, 0.72);
+
+  for (let row = 2; row < heightGrid.height - 2; row += 3) {
+    for (let column = 2; column < heightGrid.width - 2; column += 3) {
+      const index = row * heightGrid.width + column;
+      const heightValue = heightGrid.values[index] ?? 0;
+      const biome = biomes[index] ?? "ocean";
+      if (
+        heightValue < threshold ||
+        (biome !== "mountain" && biome !== "snow") ||
+        rng.next() > 0.44
+      ) {
+        continue;
+      }
+
+      const x = (column + 0.5) / heightGrid.width;
+      const y = (row + 0.5) / heightGrid.height;
+      const angle =
+        fractalNoise(x * 8.5, y * 8.5, `${config.seed}:ridge-angle`, 2) * Math.PI * 2;
+      const ridgeLength = rng.float(0.012, 0.028) * (0.75 + config.mountainStrength * 0.65);
+      const curve = rng.float(-0.006, 0.006);
+      ridges.push([
+        {
+          x: (x - Math.cos(angle) * ridgeLength) * width,
+          y: (y - Math.sin(angle) * ridgeLength) * height
+        },
+        {
+          x: (x + Math.cos(angle + Math.PI / 2) * curve) * width,
+          y: (y + Math.sin(angle + Math.PI / 2) * curve) * height
+        },
+        {
+          x: (x + Math.cos(angle) * ridgeLength) * width,
+          y: (y + Math.sin(angle) * ridgeLength) * height
+        }
+      ]);
+
+      if (ridges.length >= 90) {
+        return ridges;
+      }
+    }
+  }
+
+  return ridges;
+}
+
+function createHeightContours(
+  width: number,
+  height: number,
+  heightGrid: HeightGrid,
+  config: MapGenerationConfig
+): Point[][] {
+  const contours: Point[][] = [];
+  const levels = [config.seaLevel + 0.12, config.seaLevel + 0.24, config.seaLevel + 0.36];
+
+  for (const level of levels) {
+    for (let row = 1; row < heightGrid.height - 1; row += 4) {
+      let runStart: Point | null = null;
+      let previous: Point | null = null;
+      for (let column = 1; column < heightGrid.width - 1; column += 1) {
+        const index = row * heightGrid.width + column;
+        const heightValue = heightGrid.values[index] ?? 0;
+        const nextHeight = heightGrid.values[index + 1] ?? heightValue;
+        const crosses = (heightValue <= level && nextHeight >= level) || (heightValue >= level && nextHeight <= level);
+        const isLand = heightValue >= config.seaLevel + 0.03;
+
+        if (crosses && isLand) {
+          const point = {
+            x: ((column + 0.5) / heightGrid.width) * width,
+            y: ((row + 0.5) / heightGrid.height) * height
+          };
+          runStart ??= point;
+          previous = point;
+        } else if (runStart && previous && distanceSq(runStart, previous) > 120) {
+          contours.push([runStart, previous]);
+          runStart = null;
+          previous = null;
+        }
+      }
+
+      if (runStart && previous && distanceSq(runStart, previous) > 120) {
+        contours.push([runStart, previous]);
+      }
+
+      if (contours.length >= 120) {
+        return contours;
+      }
+    }
+  }
+
+  return contours;
 }
 
 function createRivers(width: number, height: number, config: MapGenerationConfig): River[] {
@@ -472,7 +975,11 @@ function temperatureAt(x: number, y: number, heightValue: number, config: MapGen
   const latitude = Math.abs(y - 0.55) * 1.35;
   const noise = fractalNoise(x * 2.2 - 4, y * 2.2 + 9, `${config.seed}:temp`, 3);
   const altitudeCooling = Math.max(0, heightValue - config.seaLevel) * 0.72;
-  return clampNumber(1 - latitude - altitudeCooling + (noise - 0.5) * 0.12, 0, 1);
+  return clampNumber(
+    config.temperature * 0.62 + (1 - latitude) * 0.38 - altitudeCooling + (noise - 0.5) * 0.12,
+    0,
+    1
+  );
 }
 
 function classifyBiome(
@@ -581,6 +1088,10 @@ function distanceSq(left: Point, right: Point): number {
 
 function isWorldType(value: unknown): value is FantasyWorldType {
   return value === "continent" || value === "twinContinents" || value === "archipelago";
+}
+
+function isMapViewMode(value: unknown): value is MapGenerationConfig["mapViewMode"] {
+  return value === "political" || value === "terrain" || value === "mixed";
 }
 
 function clamp01(value: number): number {

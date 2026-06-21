@@ -13,6 +13,7 @@ export type Size = {
 export type MapRegionId = "china" | "custom" | "fantasy";
 
 export type FantasyWorldType = "continent" | "twinContinents" | "archipelago";
+export type MapViewMode = "political" | "terrain" | "mixed";
 
 export type Biome =
   | "ocean"
@@ -30,10 +31,14 @@ export type MapGenerationConfig = {
   seaLevel: number;
   mountainStrength: number;
   moisture: number;
+  temperature: number;
   riverCount: number;
   countryCount: number;
   provincesPerCountry: number;
+  mapViewMode: MapViewMode;
 };
+
+export type AzgaarStyleMapConfig = MapGenerationConfig;
 
 export type TerrainCell = {
   x: number;
@@ -52,6 +57,10 @@ export type TerrainMap = {
   moisture: number[];
   temperature: number[];
   biomes: Biome[];
+  coastline?: Point[][];
+  mountainRidges?: Point[][];
+  contours?: Point[][];
+  riverBasins?: Point[][];
 };
 
 export type River = {
@@ -120,6 +129,7 @@ export type Province = {
 };
 
 export type SoldierStatus = "wandering" | "attacking" | "fighting" | "returning";
+export type SoldierRank = "normal" | "minotaur";
 
 export type Soldier = {
   id: string;
@@ -129,6 +139,11 @@ export type Soldier = {
   y: number;
   target: Point;
   hp: number;
+  maxHp: number;
+  attackPower: number;
+  killCount: number;
+  rank: SoldierRank;
+  lastHpRegenAt: number;
   alive: boolean;
   status: SoldierStatus;
 };
@@ -140,6 +155,11 @@ export type DeadSoldier = {
 
 export type AttackTask = {
   id: string;
+  warId: string;
+  originWarId: string;
+  rootTargetCountryId: number;
+  attackerControllerCountryId: number;
+  defenderControllerCountryId: number;
   sourceTaskId?: string;
   kind: "attack" | "counter";
   counterControllerCountryId?: number;
@@ -176,6 +196,7 @@ export type RebelFaction = {
 export type SerializableGameState = {
   version: 1;
   round: number;
+  stateRevision: number;
   mapSize: Size;
   region: {
     id: MapRegionId;
@@ -198,6 +219,8 @@ export type SerializableGameState = {
     remainingMs: number;
     isRoundEnding: boolean;
     nextRoundAt: number | null;
+    roundEndReason: GameState["roundEndReason"];
+    winnerControllerCountryId: number | null;
   };
   countries: Array<{
     id: number;
@@ -228,6 +251,11 @@ export type SerializableGameState = {
     y: number;
     target: Point;
     hp: number;
+    maxHp: number;
+    attackPower: number;
+    killCount: number;
+    rank: SoldierRank;
+    lastHpRegenAt: number;
     alive: boolean;
     status: SoldierStatus;
   }>;
@@ -236,12 +264,22 @@ export type SerializableGameState = {
       id: string;
       countryId: number;
       owner: Owner;
+      hp: number;
+      maxHp: number;
+      attackPower: number;
+      killCount: number;
+      rank: SoldierRank;
       status: SoldierStatus;
     };
     reviveAt: number;
   }>;
   activeAttacks: Array<{
     id: string;
+    warId: string;
+    originWarId: string;
+    rootTargetCountryId: number;
+    attackerControllerCountryId: number;
+    defenderControllerCountryId: number;
     sourceTaskId?: string;
     kind: AttackTask["kind"];
     counterControllerCountryId?: number;
@@ -270,6 +308,52 @@ export type NetworkPlayer = {
   connected: boolean;
 };
 
+export type GameStatePatch = {
+  version: 1;
+  round: number;
+  stateRevision: number;
+  player: {
+    mainCountryId: number | null;
+    countryIds: number[];
+    networkPlayers: NetworkPlayer[];
+    allyCountryId: number | null;
+    alliance: GameState["alliance"];
+    pendingAllianceRequest: GameState["pendingAllianceRequest"];
+    profile: PlayerProfile;
+  };
+  time: {
+    startedAt: number;
+    remainingMs: number;
+    isRoundEnding: boolean;
+    nextRoundAt: number | null;
+    roundEndReason: GameState["roundEndReason"];
+    winnerControllerCountryId: number | null;
+  };
+  countries: Array<{
+    id: number;
+    displayCountryId: number;
+    controllerCountryId: number;
+    owner: Owner;
+    controller: Country["controller"];
+    defaultSoldierCap: number;
+    provincePaint: Array<{
+      id: string;
+      paintCountryId: number;
+    }>;
+  }>;
+  rebel: {
+    nextRebelFactionId: number;
+    nextRebellionCheckAt: number;
+    factions: RebelFaction[];
+  };
+  soldiers: Soldier[];
+  deadSoldiers: DeadSoldier[];
+  activeAttacks: AttackTask[];
+  commandLog: CommandLogEntry[];
+  nextCommandLogId: number;
+  message: string;
+};
+
 export type PlayerSession = {
   clientId: string;
   nickname: string;
@@ -287,6 +371,7 @@ export type CommandContext = {
 };
 
 export type GameState = {
+  stateRevision: number;
   mapSize: Size;
   region: MapRegion;
   editableMapData?: EditableMapData;
@@ -317,6 +402,8 @@ export type GameState = {
   remainingMs: number;
   isRoundEnding: boolean;
   nextRoundAt: number | null;
+  roundEndReason: "time" | "unified" | null;
+  winnerControllerCountryId: number | null;
   message: string;
   round: number;
 };

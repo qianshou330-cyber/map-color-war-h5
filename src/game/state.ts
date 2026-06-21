@@ -4,8 +4,10 @@ import {
   MAP_WIDTH,
   REBELLION_CHECK_MS,
   REBEL_FACTION_START_ID,
+  SOLDIER_ATTACK_POWER,
   SOLDIER_CAP_MAX,
-  SOLDIER_CAP_MIN
+  SOLDIER_CAP_MIN,
+  SOLDIER_MAX_HP
 } from "../constants";
 import { generateMap } from "../map/generateMap";
 import type {
@@ -37,9 +39,10 @@ export function createGameState(
     editableMapData
   );
   const countries = generatedMap.countries;
-  const soldiers = createInitialSoldiers(countries);
+  const soldiers = createInitialSoldiers(countries, now);
 
   return {
+    stateRevision: 1,
     mapSize: normalizedMapSize,
     region: generatedMap.region,
     editableMapData,
@@ -63,6 +66,8 @@ export function createGameState(
     remainingMs: GAME_DURATION_MS,
     isRoundEnding: false,
     nextRoundAt: null,
+    roundEndReason: null,
+    winnerControllerCountryId: null,
     message: `本局地图：${generatedMap.region.name}`,
     round
   };
@@ -185,7 +190,7 @@ export function getCountryPopulationCount(state: GameState, countryId: number): 
   return aliveCount + deadCount;
 }
 
-function createInitialSoldiers(countries: Country[]): Soldier[] {
+function createInitialSoldiers(countries: Country[], now: number): Soldier[] {
   const soldiers: Soldier[] = [];
 
   for (const country of countries) {
@@ -193,14 +198,19 @@ function createInitialSoldiers(countries: Country[]): Soldier[] {
     const soldierCount = randomInt(SOLDIER_CAP_MIN, country.defaultSoldierCap);
 
     for (let index = 0; index < soldierCount; index += 1) {
-      soldiers.push(createSoldier(country, "neutral", index + 1));
+      soldiers.push(createSoldier(country, "neutral", index + 1, now));
     }
   }
 
   return soldiers;
 }
 
-export function createSoldier(country: Country, owner: Owner, sequence: number): Soldier {
+export function createSoldier(
+  country: Country,
+  owner: Owner,
+  sequence: number,
+  now = performance.now()
+): Soldier {
   const spawnProvince = getSpawnProvince(country);
   const position = spawnProvince
     ? randomPointInProvince(spawnProvince)
@@ -212,7 +222,12 @@ export function createSoldier(country: Country, owner: Owner, sequence: number):
     x: position.x,
     y: position.y,
     target: randomBorderPatrolPoint(country),
-    hp: 1,
+    hp: SOLDIER_MAX_HP,
+    maxHp: SOLDIER_MAX_HP,
+    attackPower: SOLDIER_ATTACK_POWER,
+    killCount: 0,
+    rank: "normal",
+    lastHpRegenAt: now,
     alive: true,
     status: "wandering"
   };
