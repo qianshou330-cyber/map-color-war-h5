@@ -78,6 +78,7 @@ export type EditableMapData = {
   name: string;
   landParts: EditableMapLandPart[];
   generationConfig?: MapGenerationConfig;
+  sourceAspectRatio?: number;
 };
 
 export type MapLandPart = {

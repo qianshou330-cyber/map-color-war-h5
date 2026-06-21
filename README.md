@@ -218,3 +218,20 @@ MAP_GENERATION_VIEW_MODE=mixed
 ```
 
 `MAP_GENERATION_VIEW_MODE` 支持 `mixed`、`political`、`terrain`，分别对应混合图、政治图、地形图。
+
+## 图片描边地图
+
+管理员入口 `?admin=1` 新增“图片描边生成”模式：
+
+1. 上传陆地和海洋颜色分明的参考图。
+2. 调整“陆地阈值”“平滑”“最小岛屿”。
+3. 点击“提取轮廓”预览陆地外轮廓。
+4. 点击“保存”或“生成地图”，系统会在提取出的陆地内自动生成 40 个国家。
+
+导出的 JSON 会包含 `landParts`、`generationConfig` 和 `sourceAspectRatio`。如果要让 Render 公共房间使用这张描边地图，把导出的 JSON 压缩成单行后设置为 Render 环境变量：
+
+```text
+DEFAULT_EDITABLE_MAP_JSON={...}
+```
+
+设置后重新部署 Render，服务端会用这张图片描边地图创建 `room-1`。

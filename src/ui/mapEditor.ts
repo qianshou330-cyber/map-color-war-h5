@@ -3,16 +3,18 @@ import {
   createFantasyEditableMapData,
   normalizeMapGenerationConfig
 } from "../map/fantasy";
+import { traceLandPolygonsFromImageData } from "../map/imageTrace";
 import type { EditableMapData, FantasyWorldType, MapGenerationConfig, Point } from "../types";
 import { distance, polygonArea } from "../utils/geometry";
 
 const STORAGE_KEY = "map-color-war-h5:editable-map";
 const MIN_POLYGON_POINTS = 6;
-const MIN_PART_AREA = 0.001;
+const MIN_PART_AREA = 0.00025;
 const MIN_TOTAL_AREA = 0.05;
 const DRAW_POINT_GAP = 0.008;
-const SIMPLIFY_TOLERANCE = 0.006;
-const MAX_POINTS_PER_PART = 180;
+const SIMPLIFY_TOLERANCE = 0.0015;
+const MAX_POINTS_PER_PART = 280;
+const MAX_TRACE_IMAGE_SIZE = 720;
 
 type MapEditorOptions = {
   root: HTMLElement;
@@ -42,6 +44,11 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   const mapViewModeInput = requiredElement<HTMLSelectElement>(root, "[data-gen-field='mapViewMode']");
   const randomSeedButton = requiredElement<HTMLButtonElement>(root, "[data-action='random-seed']");
   const fantasyPreviewButton = requiredElement<HTMLButtonElement>(root, "[data-action='fantasy-preview']");
+  const imageFileInput = requiredElement<HTMLInputElement>(root, "[data-image-field='file']");
+  const imageThresholdInput = requiredElement<HTMLInputElement>(root, "[data-image-field='threshold']");
+  const imageSmoothingInput = requiredElement<HTMLInputElement>(root, "[data-image-field='smoothing']");
+  const imageMinIslandInput = requiredElement<HTMLInputElement>(root, "[data-image-field='minIslandArea']");
+  const imageTraceButton = requiredElement<HTMLButtonElement>(root, "[data-action='image-trace']");
   const undoButton = requiredElement<HTMLButtonElement>(root, "[data-action='undo']");
   const clearButton = requiredElement<HTMLButtonElement>(root, "[data-action='clear']");
   const saveButton = requiredElement<HTMLButtonElement>(root, "[data-action='save']");
@@ -54,6 +61,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
 
   let landParts: Point[][] = [];
   let currentGenerationConfig: MapGenerationConfig | undefined;
+  let currentSourceAspectRatio: number | undefined;
   let drawingPath: Point[] = [];
   let drawing = false;
   let canvasWidth = 1;
@@ -63,6 +71,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   if (savedMap) {
     landParts = savedMap.landParts.map((part) => part.polygon);
     currentGenerationConfig = savedMap.generationConfig;
+    currentSourceAspectRatio = savedMap.sourceAspectRatio;
     textarea.value = JSON.stringify(savedMap, null, 2);
     setGenerationForm(currentGenerationConfig ?? createDefaultMapGenerationConfig());
     setStatus("\u5df2\u8f7d\u5165\u672c\u673a\u4fdd\u5b58\u5730\u56fe");
@@ -79,6 +88,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
     currentGenerationConfig = undefined;
+    currentSourceAspectRatio = undefined;
     drawing = true;
     drawingPath = [eventToPoint(event)];
     redraw();
@@ -108,6 +118,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   fantasyPreviewButton.addEventListener("click", () => {
     const data = createFantasyEditableMapData(readGenerationConfig());
     currentGenerationConfig = data.generationConfig;
+    currentSourceAspectRatio = undefined;
     landParts = data.landParts.map((part) => part.polygon);
     textarea.value = JSON.stringify(data, null, 2);
     setGenerationForm(data.generationConfig ?? readGenerationConfig());
@@ -115,9 +126,45 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
     redraw();
   });
 
+  imageTraceButton.addEventListener("click", () => {
+    const file = imageFileInput.files?.[0];
+    if (!file) {
+      setStatus("请先选择一张参考图");
+      return;
+    }
+
+    setStatus("正在读取图片并提取陆地轮廓...");
+    void traceImageFile(file)
+      .then((result) => {
+        if (result.polygons.length === 0) {
+          setStatus("没有识别到有效陆地，请调低阈值或换一张陆海更分明的图");
+          return;
+        }
+
+        landParts = result.polygons;
+        currentSourceAspectRatio = result.sourceSize.width / Math.max(1, result.sourceSize.height);
+        currentGenerationConfig = normalizeMapGenerationConfig({
+          ...readGenerationConfig(),
+          seed: `image-trace-${Date.now().toString(36)}`,
+          worldType: "twinContinents",
+          mapViewMode: "mixed"
+        });
+        setGenerationForm(currentGenerationConfig);
+        syncTextarea();
+        setStatus(
+          `已提取 ${landParts.length} 块陆地，删除 ${result.removedComponents} 个噪点，可保存或生成地图`
+        );
+        redraw();
+      })
+      .catch(() => {
+        setStatus("图片读取失败，请换一张 PNG/JPG 参考图");
+      });
+  });
+
   undoButton.addEventListener("click", () => {
     landParts.pop();
     currentGenerationConfig = undefined;
+    currentSourceAspectRatio = undefined;
     syncTextarea();
     setStatus(landParts.length ? "\u5df2\u64a4\u9500\u4e0a\u4e00\u5757\u9646\u5730" : "\u5730\u56fe\u5df2\u6e05\u7a7a");
     redraw();
@@ -126,6 +173,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
   clearButton.addEventListener("click", () => {
     landParts = [];
     currentGenerationConfig = undefined;
+    currentSourceAspectRatio = undefined;
     drawingPath = [];
     textarea.value = "";
     setStatus("\u5730\u56fe\u5df2\u6e05\u7a7a");
@@ -171,6 +219,7 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
 
     landParts = imported.landParts.map((part) => part.polygon);
     currentGenerationConfig = imported.generationConfig;
+    currentSourceAspectRatio = imported.sourceAspectRatio;
     setGenerationForm(currentGenerationConfig ?? createDefaultMapGenerationConfig());
     textarea.value = JSON.stringify(imported, null, 2);
     setStatus("\u5df2\u5bfc\u5165\u5730\u56fe");
@@ -237,6 +286,9 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
         id: `custom-${index + 1}`,
         polygon
       })),
+      ...(currentSourceAspectRatio
+        ? { sourceAspectRatio: roundNumber(currentSourceAspectRatio, 4) }
+        : {}),
       ...(currentGenerationConfig
         ? { generationConfig: normalizeMapGenerationConfig(currentGenerationConfig) }
         : {})
@@ -264,10 +316,35 @@ export function mountMapEditor({ root, onGenerate }: MapEditorOptions): MapEdito
         id: `custom-${index + 1}`,
         polygon
       })),
+      ...(currentSourceAspectRatio
+        ? { sourceAspectRatio: roundNumber(currentSourceAspectRatio, 4) }
+        : {}),
       ...(currentGenerationConfig
         ? { generationConfig: normalizeMapGenerationConfig(currentGenerationConfig) }
         : {})
     };
+  }
+
+  async function traceImageFile(file: File) {
+    const image = await loadImage(file);
+    const scale = Math.min(1, MAX_TRACE_IMAGE_SIZE / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const offscreen = document.createElement("canvas");
+    offscreen.width = width;
+    offscreen.height = height;
+    const offscreenContext = offscreen.getContext("2d", { willReadFrequently: true });
+    if (!offscreenContext) {
+      throw new Error("Image trace canvas unavailable");
+    }
+
+    offscreenContext.drawImage(image, 0, 0, width, height);
+    const imageData = offscreenContext.getImageData(0, 0, width, height);
+    return traceLandPolygonsFromImageData(imageData, {
+      landThreshold: Number(imageThresholdInput.value),
+      smoothing: Number(imageSmoothingInput.value),
+      minIslandArea: Number(imageMinIslandInput.value)
+    });
   }
 
   function redraw(): void {
@@ -454,6 +531,30 @@ function editorMarkup(): string {
             <button type="button" data-action="fantasy-preview">生成预览</button>
           </div>
         </div>
+        <div class="map-editor-image-trace">
+          <div class="map-editor-image-title">图片描边生成</div>
+          <div class="map-editor-image-grid">
+            <label class="map-editor-file-field">
+              <span>参考图</span>
+              <input data-image-field="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+            </label>
+            <label>
+              <span>陆地阈值</span>
+              <input data-image-field="threshold" type="range" min="80" max="235" step="1" value="154" />
+            </label>
+            <label>
+              <span>平滑</span>
+              <input data-image-field="smoothing" type="number" min="0" max="3" step="1" value="1" />
+            </label>
+            <label>
+              <span>最小岛屿</span>
+              <input data-image-field="minIslandArea" type="number" min="0.00004" max="0.01" step="0.00005" value="0.00035" />
+            </label>
+          </div>
+          <div class="map-editor-image-actions">
+            <button type="button" data-action="image-trace">提取轮廓</button>
+          </div>
+        </div>
         <div class="map-editor-actions">
           <button type="button" data-action="undo">\u64a4\u9500</button>
           <button type="button" data-action="clear">\u6e05\u7a7a</button>
@@ -615,6 +716,9 @@ function parseEditableMapData(raw: string): EditableMapData | null {
       version: 1,
       name: typeof value.name === "string" && value.name ? value.name : "\u81ea\u5b9a\u4e49\u5730\u56fe",
       landParts,
+      ...(isValidAspectRatio(value.sourceAspectRatio)
+        ? { sourceAspectRatio: Number(value.sourceAspectRatio) }
+        : {}),
       ...(value.generationConfig
         ? { generationConfig: normalizeMapGenerationConfig(value.generationConfig) }
         : {})
@@ -778,4 +882,30 @@ function getCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
     throw new Error("Map editor canvas context is unavailable");
   }
   return context;
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image load failed"));
+    };
+    image.src = url;
+  });
+}
+
+function isValidAspectRatio(value: unknown): boolean {
+  const ratio = Number(value);
+  return Number.isFinite(ratio) && ratio >= 0.3 && ratio <= 4;
+}
+
+function roundNumber(value: number, digits: number): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }

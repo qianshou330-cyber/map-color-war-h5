@@ -144,7 +144,7 @@ function startGame(
 
   setCustomNickname(playerProfile, setupData.nickname);
   const initialViewportSize = measureGameRoot(gameRoot);
-  const initialMapSize = measureInitialMapSize(gameRoot);
+  const initialMapSize = measureInitialMapSize(gameRoot, editableMapData);
   state = createGameState(1, performance.now(), initialMapSize, editableMapData, playerProfile);
   resetSfxStateTracker();
   state.message = networkMode
@@ -245,7 +245,12 @@ function measureGameRoot(element: HTMLElement) {
   };
 }
 
-function measureInitialMapSize(element: HTMLElement) {
+function measureInitialMapSize(element: HTMLElement, editableMapData?: EditableMapData) {
+  const aspectRatio = editableMapData?.sourceAspectRatio;
+  if (aspectRatio && Number.isFinite(aspectRatio) && aspectRatio > 0) {
+    return getAspectAwareMapSize(aspectRatio);
+  }
+
   if (commandOnlyMobileMode) {
     return {
       width: MOBILE_MAP_WIDTH,
@@ -254,6 +259,23 @@ function measureInitialMapSize(element: HTMLElement) {
   }
 
   return measureGameRoot(element);
+}
+
+function getAspectAwareMapSize(aspectRatio: number) {
+  const clampedAspect = Math.min(2.2, Math.max(0.72, aspectRatio));
+  if (clampedAspect >= 1.12) {
+    const width = Math.max(MOBILE_MAP_WIDTH, 960);
+    return {
+      width,
+      height: Math.max(420, Math.round(width / clampedAspect))
+    };
+  }
+
+  const height = Math.max(MOBILE_MAP_HEIGHT, 700);
+  return {
+    width: Math.max(420, Math.round(height * clampedAspect)),
+    height
+  };
 }
 
 function requiredElement<T extends HTMLElement>(selector: string): T {

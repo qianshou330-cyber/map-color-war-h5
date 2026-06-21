@@ -9,6 +9,7 @@ import { createGameState } from "../src/game/state";
 import { tickGame } from "../src/game/tick";
 import { createFantasyEditableMapData, normalizeMapGenerationConfig } from "../src/map/fantasy";
 import { createGameStatePatch } from "../src/network/statePatch";
+import { polygonArea } from "../src/utils/geometry";
 import type {
   CommandContext,
   CommandResult,
@@ -98,9 +99,10 @@ httpServer.listen(PORT, () => {
 
 function createRoom(roomId: string): RoomState {
   const now = performance.now();
+  const editableMapData = createServerEditableMapData();
   return {
     roomId,
-    gameState: createGameState(1, now, MAP_SIZE, createServerEditableMapData()),
+    gameState: createGameState(1, now, getServerMapSize(editableMapData), editableMapData),
     players: new Map(),
     sockets: new Map(),
     createdAt: now,
@@ -109,6 +111,11 @@ function createRoom(roomId: string): RoomState {
 }
 
 function createServerEditableMapData(): EditableMapData {
+  const importedMap = parseServerEditableMapData(process.env.DEFAULT_EDITABLE_MAP_JSON);
+  if (importedMap) {
+    return importedMap;
+  }
+
   const seed = getMapEnvValue(process.env.MAP_GENERATION_SEED, "room-1-rugged-archipelago");
   const worldType = parseWorldType(
     getMapEnvValue(process.env.MAP_GENERATION_WORLD_TYPE, "twinContinents")
@@ -124,6 +131,82 @@ function createServerEditableMapData(): EditableMapData {
     mapViewMode: parseMapViewMode(process.env.MAP_GENERATION_VIEW_MODE)
   });
   return createFantasyEditableMapData(config);
+}
+
+function getServerMapSize(editableMapData: EditableMapData) {
+  const aspectRatio = editableMapData.sourceAspectRatio;
+  if (!aspectRatio || !Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+    return MAP_SIZE;
+  }
+
+  const clampedAspect = Math.min(2.2, Math.max(0.72, aspectRatio));
+  if (clampedAspect >= 1.12) {
+    const width = Math.max(MAP_WIDTH, 960);
+    return {
+      width,
+      height: Math.max(420, Math.round(width / clampedAspect))
+    };
+  }
+
+  const height = Math.max(MAP_HEIGHT, 700);
+  return {
+    width: Math.max(420, Math.round(height * clampedAspect)),
+    height
+  };
+}
+
+function parseServerEditableMapData(raw: string | undefined): EditableMapData | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const value = JSON.parse(raw) as Partial<EditableMapData>;
+    if (!value || !Array.isArray(value.landParts)) {
+      return null;
+    }
+
+    const landParts = value.landParts.flatMap((part, index) => {
+      if (!part || !Array.isArray(part.polygon)) {
+        return [];
+      }
+
+      const polygon = part.polygon
+        .map((point) => ({
+          x: clamp01(Number(point.x)),
+          y: clamp01(Number(point.y))
+        }))
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+
+      return polygon.length >= 3 && polygonArea(polygon) > 0.0002
+        ? [
+            {
+              id: typeof part.id === "string" && part.id ? part.id : `custom-${index + 1}`,
+              polygon
+            }
+          ]
+        : [];
+    });
+
+    const totalArea = landParts.reduce((sum, part) => sum + polygonArea(part.polygon), 0);
+    if (landParts.length === 0 || totalArea < 0.05) {
+      return null;
+    }
+
+    return {
+      version: 1,
+      name: typeof value.name === "string" && value.name ? value.name : "Imported Map",
+      landParts,
+      ...(value.generationConfig
+        ? { generationConfig: normalizeMapGenerationConfig(value.generationConfig) }
+        : {}),
+      ...(isValidAspectRatio(value.sourceAspectRatio)
+        ? { sourceAspectRatio: Number(value.sourceAspectRatio) }
+        : {})
+    };
+  } catch {
+    return null;
+  }
 }
 
 function getMapEnvValue(value: string | undefined, fallback: string): string {
@@ -514,4 +597,16 @@ function hasOpenSocketForClient(roomState: RoomState, clientId: string): boolean
 function normalizeClientId(clientId: string): string {
   const trimmed = clientId.trim();
   return trimmed || `client-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+
+function isValidAspectRatio(value: unknown): boolean {
+  const ratio = Number(value);
+  return Number.isFinite(ratio) && ratio >= 0.3 && ratio <= 4;
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
 }

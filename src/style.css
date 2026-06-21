@@ -299,6 +299,84 @@ body {
   border-color: rgba(25, 183, 255, 0.7);
 }
 
+.map-editor-image-trace {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid rgba(25, 183, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(25, 183, 255, 0.055);
+}
+
+.map-editor-image-title {
+  align-self: center;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.map-editor-image-grid {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.4fr) minmax(100px, 1fr) minmax(72px, 0.6fr) minmax(96px, 0.8fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.map-editor-image-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: rgba(223, 246, 255, 0.82);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.map-editor-image-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ecf4ff;
+  font-size: 12px;
+}
+
+.map-editor-image-grid input[type="range"] {
+  padding: 0;
+}
+
+.map-editor-file-field input[type="file"] {
+  padding: 4px 8px;
+  line-height: 20px;
+}
+
+.map-editor-image-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.map-editor-image-actions button {
+  height: 32px;
+  min-width: 92px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(25, 183, 255, 0.14);
+  color: #ecf4ff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.map-editor-image-actions button:hover {
+  border-color: rgba(25, 183, 255, 0.78);
+}
+
 .map-editor-actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(64px, 1fr)) minmax(112px, 1.4fr);
@@ -801,6 +879,19 @@ body {
 
   .map-editor-generator-actions button {
     flex: 1 1 0;
+  }
+
+  .map-editor-image-trace {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .map-editor-image-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .map-editor-image-actions button {
+    width: 100%;
   }
 
   .map-editor-actions button {
