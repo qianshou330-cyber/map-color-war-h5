@@ -795,14 +795,12 @@ export class MapColorWarScene extends Phaser.Scene {
   private handleResize(): void {
     const width = this.scale.width;
     const height = this.scale.height;
-    const cameraBounds = this.commandOnlyMode
-      ? this.getPlayableCameraBounds()
-      : {
-          x: 0,
-          y: 0,
-          width: Math.max(1, this.state.mapSize.width),
-          height: Math.max(1, this.state.mapSize.height)
-        };
+    const cameraBounds = {
+      x: 0,
+      y: 0,
+      width: Math.max(1, this.state.mapSize.width),
+      height: Math.max(1, this.state.mapSize.height)
+    };
     const zoom = Math.min(width / cameraBounds.width, height / cameraBounds.height);
     this.cameras.main.setViewport(0, 0, width, height);
     this.cameras.main.setZoom(zoom);
@@ -810,53 +808,6 @@ export class MapColorWarScene extends Phaser.Scene {
       cameraBounds.x + cameraBounds.width / 2,
       cameraBounds.y + cameraBounds.height / 2
     );
-  }
-
-  private getPlayableCameraBounds(): { x: number; y: number; width: number; height: number } {
-    if (this.state.countries.length === 0) {
-      return {
-        x: 0,
-        y: 0,
-        width: Math.max(1, this.state.mapSize.width),
-        height: Math.max(1, this.state.mapSize.height)
-      };
-    }
-
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-
-    for (const country of this.state.countries) {
-      for (const point of country.polygon) {
-        minX = Math.min(minX, point.x);
-        minY = Math.min(minY, point.y);
-        maxX = Math.max(maxX, point.x);
-        maxY = Math.max(maxY, point.y);
-      }
-    }
-
-    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-      return {
-        x: 0,
-        y: 0,
-        width: Math.max(1, this.state.mapSize.width),
-        height: Math.max(1, this.state.mapSize.height)
-      };
-    }
-
-    const padding = 28;
-    const x = Math.max(0, minX - padding);
-    const y = Math.max(0, minY - padding);
-    const right = Math.min(this.state.mapSize.width, maxX + padding);
-    const bottom = Math.min(this.state.mapSize.height, maxY + padding);
-
-    return {
-      x,
-      y,
-      width: Math.max(1, right - x),
-      height: Math.max(1, bottom - y)
-    };
   }
 
   private getCurrentMapSize(): Size {
