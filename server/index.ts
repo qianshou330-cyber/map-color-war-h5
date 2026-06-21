@@ -30,8 +30,8 @@ const PORT = Number.parseInt(process.env.PORT ?? "8787", 10);
 const SERVER_TICK_MS = 50;
 const BROADCAST_MS = 150;
 const MAP_SIZE = {
-  width: Number.parseInt(process.env.MAP_WIDTH ?? `${MAP_WIDTH}`, 10),
-  height: Number.parseInt(process.env.MAP_HEIGHT ?? `${MAP_HEIGHT}`, 10)
+  width: MAP_WIDTH,
+  height: MAP_HEIGHT
 };
 
 type ServerPlayerSession = PlayerSession & {
