@@ -57,6 +57,7 @@ export function createGameState(
     alliance: null,
     pendingAllianceRequest: null,
     activeAttacks: [],
+    autoAttackPlans: [],
     nextRebelFactionId: REBEL_FACTION_START_ID,
     nextRebellionCheckAt: now + REBELLION_CHECK_MS,
     rebelFactions: [],

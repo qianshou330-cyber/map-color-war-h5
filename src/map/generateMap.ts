@@ -193,6 +193,7 @@ function generateMapOnce(
       displayCountryId: index + 1,
       controllerCountryId: index + 1,
       polygon,
+      territoryPolygons: [polygon],
       center,
       area,
       landPartId: seed.landPartId,
@@ -222,6 +223,7 @@ function generateMapOnce(
     countries.push(country);
   }
 
+  attachAuxiliaryLandParts(region, countries);
   computeCountryNeighbors(countries);
 
   return {
@@ -375,7 +377,9 @@ function allocateSeedCounts(
   region: MapRegion,
   rng: SeededRandom
 ): Array<{ landPart: MapLandPart; count: number }> {
-  const areas = region.landParts.map((landPart) => ({
+  const seedableLandParts = region.landParts.filter((landPart) => landPart.seedable !== false);
+  const allocationLandParts = seedableLandParts.length > 0 ? seedableLandParts : region.landParts;
+  const areas = allocationLandParts.map((landPart) => ({
     landPart,
     area: polygonArea(landPart.polygon),
     count: Math.max(0, Math.floor(landPart.minSeeds ?? 0))
@@ -821,6 +825,31 @@ function clipCellToRegionPart(cell: Point[], landPart: MapLandPart, seed: Point)
     parts[0] ??
     []
   );
+}
+
+function attachAuxiliaryLandParts(region: MapRegion, countries: Country[]): void {
+  const usedLandPartIds = new Set(countries.map((country) => country.landPartId));
+  const auxiliaryLandParts = region.landParts.filter(
+    (landPart) =>
+      landPart.attachToNearestCountry === true ||
+      (landPart.seedable === false && !usedLandPartIds.has(landPart.id))
+  );
+
+  for (const landPart of auxiliaryLandParts) {
+    if (landPart.polygon.length < 3) {
+      continue;
+    }
+
+    const center = polygonCentroid(landPart.polygon);
+    const nearestCountry = [...countries].sort(
+      (left, right) => distance(left.center, center) - distance(right.center, center)
+    )[0];
+    if (!nearestCountry) {
+      continue;
+    }
+
+    nearestCountry.territoryPolygons.push(landPart.polygon);
+  }
 }
 
 function computeCountryNeighbors(countries: Country[]): void {

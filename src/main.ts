@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import "./style.css";
 import { COUNTRY_COUNT, MAP_HEIGHT, MAP_WIDTH, MOBILE_MAP_HEIGHT, MOBILE_MAP_WIDTH } from "./constants";
+import { playSfx, resetSfxStateTracker, syncStateSfx } from "./audio/sfx";
 import {
   createPlayerProfile,
   getDisplayNickname,
@@ -13,6 +14,7 @@ import { createGameState } from "./game/state";
 import { NetworkGameClient, getConfiguredWebSocketUrl, isNetworkModeEnabled } from "./network/client";
 import { MapColorWarScene } from "./phaser/MapColorWarScene";
 import { normalizeSettledCountryPaint } from "./game/provinces";
+import { createFantasyEditableMapData } from "./map/fantasy";
 import type {
   EditableMapData,
   GameState,
@@ -51,6 +53,7 @@ let pendingEditableMapData: EditableMapData | undefined;
 let pendingPlayerProfile: PlayerProfile | null = null;
 let hasPendingSetup = false;
 let selfClientId: string | null = null;
+let hasReceivedAuthoritativeState = false;
 
 const render = () => {
   if (!state) {
@@ -61,6 +64,7 @@ const render = () => {
   renderCommandChat(commandChat, state, selfClientId);
   renderCommandMessage(commandMessage, state);
   renderPlayerStatus(playerStatus, state);
+  syncStateSfx(state);
 };
 
 const editor = mountMapEditor({
@@ -142,6 +146,7 @@ function startGame(
   const initialViewportSize = measureGameRoot(gameRoot);
   const initialMapSize = measureInitialMapSize(gameRoot);
   state = createGameState(1, performance.now(), initialMapSize, editableMapData, playerProfile);
+  resetSfxStateTracker();
   state.message = networkMode
     ? "\u6b63\u5728\u8fde\u63a5\u7f51\u7edc\u5bf9\u6218..."
     : "\u8bf7\u9009\u62e9\u56fd\u5bb6\u7f16\u53f7\uff0c\u5728\u5e95\u90e8\u8f93\u5165 \u52a0\u516512";
@@ -193,11 +198,13 @@ function stopGame(): void {
   }
 
   state = null;
+  resetSfxStateTracker();
   hudRoot.innerHTML = "";
   commandChat.innerHTML = "";
   commandMessage.textContent = "";
   playerStatus.textContent = "";
   selfClientId = null;
+  hasReceivedAuthoritativeState = false;
 }
 
 function showEditor(): void {
@@ -217,7 +224,17 @@ function showEditor(): void {
 }
 
 function getDefaultEditableMapData(): EditableMapData | undefined {
-  return loadSavedEditableMap() ?? undefined;
+  return (
+    loadSavedEditableMap() ??
+    createFantasyEditableMapData({
+      seed: "local-rugged-archipelago",
+      worldType: "twinContinents",
+      seaLevel: 0.43,
+      mountainStrength: 0.68,
+      moisture: 0.58,
+      riverCount: 10
+    })
+  );
 }
 
 function measureGameRoot(element: HTMLElement) {
@@ -266,6 +283,9 @@ function connectNetworkGame(playerProfile: PlayerProfile): void {
     onMessage: (_ok, message) => {
       if (state) {
         state.message = message;
+        if (!_ok) {
+          playSfx("error");
+        }
         render();
       }
     },
@@ -297,6 +317,11 @@ function submitNetworkCommand(inputText: string) {
 function applyAuthoritativeState(remoteState: GameState, self: NetworkPlayer | null): void {
   if (!state) {
     return;
+  }
+
+  if (!hasReceivedAuthoritativeState) {
+    resetSfxStateTracker();
+    hasReceivedAuthoritativeState = true;
   }
 
   const localProfile = state.playerProfile;

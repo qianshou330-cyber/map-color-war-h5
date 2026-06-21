@@ -110,11 +110,11 @@ function createRoom(roomId: string): RoomState {
 
 function createServerEditableMapData(): EditableMapData {
   const config = normalizeMapGenerationConfig({
-    seed: process.env.MAP_GENERATION_SEED ?? "room-1-fantasy",
+    seed: process.env.MAP_GENERATION_SEED ?? "room-1-rugged-archipelago",
     worldType: parseWorldType(process.env.MAP_GENERATION_WORLD_TYPE),
-    seaLevel: Number(process.env.MAP_GENERATION_SEA_LEVEL ?? 0.46),
-    mountainStrength: Number(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH ?? 0.62),
-    moisture: Number(process.env.MAP_GENERATION_MOISTURE ?? 0.56),
+    seaLevel: Number(process.env.MAP_GENERATION_SEA_LEVEL ?? 0.43),
+    mountainStrength: Number(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH ?? 0.68),
+    moisture: Number(process.env.MAP_GENERATION_MOISTURE ?? 0.58),
     temperature: Number(process.env.MAP_GENERATION_TEMPERATURE ?? 0.58),
     riverCount: Number(process.env.MAP_GENERATION_RIVER_COUNT ?? 8),
     mapViewMode: parseMapViewMode(process.env.MAP_GENERATION_VIEW_MODE)
@@ -127,7 +127,7 @@ function parseWorldType(value: string | undefined): FantasyWorldType {
     return value;
   }
 
-  return "continent";
+  return "twinContinents";
 }
 
 function parseMapViewMode(value: string | undefined): MapViewMode {

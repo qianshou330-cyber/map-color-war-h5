@@ -13,13 +13,13 @@ import type {
 import { pointInPolygon, polygonArea } from "../utils/geometry";
 import { createSeededRandom, type SeededRandom } from "../utils/seededRandom";
 
-const TERRAIN_GRID_WIDTH = 160;
-const TERRAIN_GRID_HEIGHT = 90;
-const LAND_POLYGON_STEPS = 48;
+const TERRAIN_GRID_WIDTH = 112;
+const TERRAIN_GRID_HEIGHT = 140;
+const LAND_POLYGON_STEPS = 224;
 const RIVER_TRACE_STEPS = 64;
 const MIN_TOTAL_PLAYABLE_LAND_AREA = 0.18;
-const HEIGHTMAP_LAND_GRID_WIDTH = 128;
-const HEIGHTMAP_LAND_GRID_HEIGHT = 72;
+const HEIGHTMAP_LAND_GRID_WIDTH = 176;
+const HEIGHTMAP_LAND_GRID_HEIGHT = 220;
 
 type HeightGrid = {
   width: number;
@@ -42,12 +42,12 @@ export function createDefaultMapGenerationConfig(
 ): MapGenerationConfig {
   return normalizeMapGenerationConfig({
     seed: `fantasy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-    worldType: "continent",
-    seaLevel: 0.46,
-    mountainStrength: 0.62,
-    moisture: 0.56,
+    worldType: "twinContinents",
+    seaLevel: 0.43,
+    mountainStrength: 0.68,
+    moisture: 0.58,
     temperature: 0.58,
-    riverCount: 8,
+    riverCount: 10,
     countryCount: COUNTRY_COUNT,
     provincesPerCountry: PROVINCES_PER_COUNTRY,
     mapViewMode: "mixed",
@@ -58,7 +58,7 @@ export function createDefaultMapGenerationConfig(
 export function normalizeMapGenerationConfig(
   partial: Partial<MapGenerationConfig> = {}
 ): MapGenerationConfig {
-  const worldType = isWorldType(partial.worldType) ? partial.worldType : "continent";
+  const worldType = isWorldType(partial.worldType) ? partial.worldType : "twinContinents";
   return {
     seed: String(partial.seed || "fantasy-map"),
     worldType,
@@ -97,7 +97,7 @@ export function createFantasyRegion(
   const generationConfig = normalizeMapGenerationConfig(partial);
   const savedPlayableParts =
     savedLandParts && savedLandParts.length > 0
-      ? filterPlayableLandParts(savedLandParts, generationConfig)
+      ? filterVisibleLandParts(savedLandParts, generationConfig)
       : [];
   const normalizedParts =
     savedPlayableParts.length > 0
@@ -109,9 +109,12 @@ export function createFantasyRegion(
   );
   const landParts: MapLandPart[] = normalizedParts.map((polygon, index) => {
     const areaRatio = polygonArea(polygon) / totalArea;
+    const seedable = isSeedableLandPart(polygon, generationConfig);
     return {
       id: `fantasy-${index + 1}`,
-      minSeeds: Math.max(0, Math.floor(COUNTRY_COUNT * areaRatio * 0.58)),
+      minSeeds: seedable ? Math.max(0, Math.floor(COUNTRY_COUNT * areaRatio * 0.58)) : 0,
+      seedable,
+      attachToNearestCountry: !seedable,
       polygon: scalePolygon(polygon, width, height)
     };
   });
@@ -152,7 +155,7 @@ function createFantasyLandParts(config: MapGenerationConfig): Point[][] {
   );
   const heightmapParts = extractLandPolygonsFromHeightGrid(heightGrid, config.seaLevel, config);
   const terrainAlignedParts = filterTerrainAlignedLandParts(heightmapParts, heightGrid, config);
-  const playableParts = filterPlayableLandParts(terrainAlignedParts, config);
+  const playableParts = filterVisibleLandParts(terrainAlignedParts, config);
 
   const totalArea = playableParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
   return totalArea >= MIN_TOTAL_PLAYABLE_LAND_AREA
@@ -201,7 +204,7 @@ function createBlobFallbackLandParts(
   const blobParts = blobs
     .filter((blob) => blob.asLandPart)
     .map((blob) => createLandPolygon(blob, config, blobs));
-  const playableParts = filterPlayableLandParts(
+  const playableParts = filterVisibleLandParts(
     filterTerrainAlignedLandParts(blobParts, heightGrid, config),
     config
   );
@@ -210,7 +213,7 @@ function createBlobFallbackLandParts(
     return playableParts;
   }
 
-  const areaOnlyParts = filterPlayableLandParts(blobParts, config);
+  const areaOnlyParts = filterVisibleLandParts(blobParts, config);
   const areaOnlyTotal = areaOnlyParts.reduce((sum, polygon) => sum + polygonArea(polygon), 0);
   return areaOnlyTotal >= MIN_TOTAL_PLAYABLE_LAND_AREA
     ? areaOnlyParts
@@ -425,10 +428,79 @@ function cleanContourPolygon(polygon: Point[], config: MapGenerationConfig): Poi
     withoutCollinear,
     config.worldType === "archipelago" ? 1 : 2
   );
-  return simplifyPolygon(removeCollinearPoints(smoothed), 0.0038).map((point) => ({
+  const simplified = simplifyPolygon(removeCollinearPoints(smoothed), 0.00135).map((point) => ({
     x: clamp01(point.x),
     y: clamp01(point.y)
   }));
+  return fitCoastlinePointCount(simplified, config);
+}
+
+function fitCoastlinePointCount(polygon: Point[], config: MapGenerationConfig): Point[] {
+  if (polygon.length < 4) {
+    return polygon;
+  }
+
+  const area = polygonArea(polygon);
+  const targetCount = getTargetCoastlinePointCount(area, config);
+  const resampled = resampleClosedPolygon(polygon, targetCount);
+  return addCoastalMicroDetail(resampled, config, area);
+}
+
+function getTargetCoastlinePointCount(area: number, config: MapGenerationConfig): number {
+  if (area >= 0.11) {
+    return config.worldType === "archipelago" ? 196 : 232;
+  }
+
+  if (area >= 0.055) {
+    return 116;
+  }
+
+  if (area >= 0.018) {
+    return 72;
+  }
+
+  return 24;
+}
+
+function resampleClosedPolygon(polygon: Point[], targetCount: number): Point[] {
+  const perimeter = getNormalizedPolygonPerimeter(polygon);
+  if (perimeter < 0.000001) {
+    return polygon;
+  }
+
+  const result: Point[] = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    result.push(pointOnNormalizedPolygonPerimeter(polygon, (perimeter * index) / targetCount));
+  }
+  return result;
+}
+
+function addCoastalMicroDetail(
+  polygon: Point[],
+  config: MapGenerationConfig,
+  area: number
+): Point[] {
+  const amplitude = clampNumber(Math.sqrt(area) * 0.012, 0.0012, 0.0065);
+  return polygon.map((point, index) => {
+    const previous = polygon[(index - 1 + polygon.length) % polygon.length];
+    const next = polygon[(index + 1) % polygon.length];
+    const tangent = {
+      x: next.x - previous.x,
+      y: next.y - previous.y
+    };
+    const length = Math.max(0.000001, Math.hypot(tangent.x, tangent.y));
+    const normal = {
+      x: -tangent.y / length,
+      y: tangent.x / length
+    };
+    const broad = fractalNoise(point.x * 32, point.y * 32, `${config.seed}:coast-detail`, 3) - 0.5;
+    const fine = fractalNoise(point.x * 76 + 7, point.y * 76 - 3, `${config.seed}:coast-fine`, 2) - 0.5;
+    const displacement = (broad * 0.72 + fine * 0.28) * amplitude;
+    return {
+      x: clamp01(point.x + normal.x * displacement),
+      y: clamp01(point.y + normal.y * displacement)
+    };
+  });
 }
 
 function removeAdjacentDuplicatePoints(points: Point[]): Point[] {
@@ -515,6 +587,33 @@ function distanceToLine(point: Point, start: Point, end: Point): number {
   );
 }
 
+function getNormalizedPolygonPerimeter(polygon: Point[]): number {
+  let perimeter = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    perimeter += Math.sqrt(distanceSq(polygon[index], polygon[(index + 1) % polygon.length]));
+  }
+  return perimeter;
+}
+
+function pointOnNormalizedPolygonPerimeter(polygon: Point[], targetDistance: number): Point {
+  let traveled = 0;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const segmentLength = Math.sqrt(distanceSq(start, end));
+    if (traveled + segmentLength >= targetDistance) {
+      const ratio = segmentLength < 0.000001 ? 0 : (targetDistance - traveled) / segmentLength;
+      return {
+        x: start.x + (end.x - start.x) * ratio,
+        y: start.y + (end.y - start.y) * ratio
+      };
+    }
+    traveled += segmentLength;
+  }
+
+  return { ...polygon[0] };
+}
+
 function cellKey(column: number, row: number): string {
   return `${column}:${row}`;
 }
@@ -530,23 +629,39 @@ function pointKey(point: Point): string {
   return `${Math.round(point.x * 100000)}:${Math.round(point.y * 100000)}`;
 }
 
-function filterPlayableLandParts(parts: Point[][], config: MapGenerationConfig): Point[][] {
-  const minArea = getMinPlayableLandPartArea(config);
+function filterVisibleLandParts(parts: Point[][], config: MapGenerationConfig): Point[][] {
+  const minArea = getMinVisibleLandPartArea(config);
   return parts
     .filter((polygon) => polygon.length >= 8 && polygonArea(polygon) >= minArea)
     .sort((left, right) => polygonArea(right) - polygonArea(left));
 }
 
-function getMinPlayableLandPartArea(config: MapGenerationConfig): number {
+function isSeedableLandPart(polygon: Point[], config: MapGenerationConfig): boolean {
+  return polygonArea(polygon) >= getMinSeedableLandPartArea(config);
+}
+
+function getMinVisibleLandPartArea(config: MapGenerationConfig): number {
   if (config.worldType === "archipelago") {
-    return 0.018;
+    return 0.0028;
   }
 
   if (config.worldType === "twinContinents") {
-    return 0.035;
+    return 0.0035;
   }
 
-  return 0.08;
+  return 0.0045;
+}
+
+function getMinSeedableLandPartArea(config: MapGenerationConfig): number {
+  if (config.worldType === "archipelago") {
+    return 0.014;
+  }
+
+  if (config.worldType === "twinContinents") {
+    return 0.02;
+  }
+
+  return 0.045;
 }
 
 function createFallbackContinent(config: MapGenerationConfig): Point[][] {
@@ -587,14 +702,14 @@ function createFallbackContinent(config: MapGenerationConfig): Point[][] {
 function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
   const rng = createSeededRandom(`${config.seed}:land`);
   if (config.worldType === "archipelago") {
-    const count = rng.int(7, 10);
+    const count = rng.int(12, 16);
     return Array.from({ length: count }, (_, index) => ({
       id: `island-${index + 1}`,
       cx: rng.float(0.14, 0.86),
       cy: rng.float(0.16, 0.84),
-      rx: rng.float(0.09, 0.19),
-      ry: rng.float(0.075, 0.16),
-      strength: rng.float(0.82, 1.04),
+      rx: rng.float(0.055, 0.17),
+      ry: rng.float(0.045, 0.15),
+      strength: rng.float(0.74, 1.04),
       asLandPart: true
     }));
   }
@@ -619,7 +734,8 @@ function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
         strength: 0.98,
         asLandPart: true
       },
-      ...createSatelliteBlobs(rng, 4, false)
+      ...createRuggedIslandChainBlobs(rng),
+      ...createSatelliteBlobs(rng, 5, false)
     ];
   }
 
@@ -651,8 +767,36 @@ function createLandBlobs(config: MapGenerationConfig): LandBlob[] {
       strength: 0.38,
       asLandPart: false
     },
-    ...createSatelliteBlobs(rng, 3, false)
+    ...createSatelliteBlobs(rng, 6, false)
   ];
+}
+
+function createRuggedIslandChainBlobs(rng: SeededRandom): LandBlob[] {
+  const chainAnchors = [
+    { x: 0.47, y: 0.26, dx: 0.19, dy: 0.06, count: 4 },
+    { x: 0.5, y: 0.5, dx: 0.16, dy: 0.1, count: 5 },
+    { x: 0.48, y: 0.74, dx: 0.22, dy: 0.08, count: 4 },
+    { x: 0.18, y: 0.78, dx: 0.1, dy: 0.08, count: 3 },
+    { x: 0.82, y: 0.22, dx: 0.1, dy: 0.08, count: 3 }
+  ];
+  const blobs: LandBlob[] = [];
+
+  for (const [anchorIndex, anchor] of chainAnchors.entries()) {
+    for (let index = 0; index < anchor.count; index += 1) {
+      const ratio = anchor.count === 1 ? 0.5 : index / (anchor.count - 1);
+      blobs.push({
+        id: `chain-${anchorIndex + 1}-${index + 1}`,
+        cx: clamp01(anchor.x + (ratio - 0.5) * anchor.dx + rng.float(-0.035, 0.035)),
+        cy: clamp01(anchor.y + Math.sin(ratio * Math.PI * 2) * anchor.dy + rng.float(-0.035, 0.035)),
+        rx: rng.float(0.025, 0.078),
+        ry: rng.float(0.02, 0.066),
+        strength: rng.float(0.58, 0.88),
+        asLandPart: true
+      });
+    }
+  }
+
+  return blobs;
 }
 
 function createSatelliteBlobs(
@@ -664,9 +808,9 @@ function createSatelliteBlobs(
     id: `satellite-${index + 1}`,
     cx: rng.float(0.1, 0.9),
     cy: rng.float(0.16, 0.86),
-    rx: rng.float(0.07, 0.14),
-    ry: rng.float(0.055, 0.12),
-    strength: rng.float(0.74, 0.94),
+    rx: rng.float(0.035, 0.13),
+    ry: rng.float(0.03, 0.11),
+    strength: rng.float(0.62, 0.94),
     asLandPart
   }));
 }
@@ -674,9 +818,10 @@ function createSatelliteBlobs(
 function createLandPolygon(blob: LandBlob, config: MapGenerationConfig, blobs: LandBlob[]): Point[] {
   const polygon: Point[] = [];
   const maxScale = 1.42;
+  const steps = getLandPolygonStepCount(blob);
 
-  for (let index = 0; index < LAND_POLYGON_STEPS; index += 1) {
-    const angle = (Math.PI * 2 * index) / LAND_POLYGON_STEPS;
+  for (let index = 0; index < steps; index += 1) {
+    const angle = (Math.PI * 2 * index) / steps;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     let lastLand = 0.08;
@@ -704,6 +849,23 @@ function createLandPolygon(blob: LandBlob, config: MapGenerationConfig, blobs: L
   }
 
   return polygon;
+}
+
+function getLandPolygonStepCount(blob: LandBlob): number {
+  const ellipseArea = Math.PI * blob.rx * blob.ry;
+  if (ellipseArea >= 0.07) {
+    return LAND_POLYGON_STEPS;
+  }
+
+  if (ellipseArea >= 0.03) {
+    return 116;
+  }
+
+  if (ellipseArea >= 0.012) {
+    return 72;
+  }
+
+  return 28;
 }
 
 function createTerrainMap(
@@ -960,8 +1122,9 @@ function heightAt(x: number, y: number, config: MapGenerationConfig, blobs: Land
   const edgeFalloff = clampNumber(edge * 9, 0, 1);
   const broadNoise = fractalNoise(x * 3.4, y * 3.4, `${config.seed}:broad`, 4);
   const ridgeNoise = Math.abs(fractalNoise(x * 9.2, y * 9.2, `${config.seed}:ridge`, 3) - 0.5) * 2;
+  const coastNoise = fractalNoise(x * 22, y * 22, `${config.seed}:coast-height`, 3) - 0.5;
   const mountainLift = ridgeNoise * 0.18 * config.mountainStrength;
-  const base = land * edgeFalloff + (broadNoise - 0.5) * 0.2 + mountainLift;
+  const base = land * edgeFalloff + (broadNoise - 0.5) * 0.2 + coastNoise * 0.075 + mountainLift;
   return clampNumber(base, 0, 1);
 }
 

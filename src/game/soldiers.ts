@@ -9,10 +9,11 @@ import {
   SOLDIER_REVIVE_MS,
   SOLDIER_SPEED,
   ATTACK_SOLDIER_SPEED,
+  SEA_MOVEMENT_SPEED_MULTIPLIER,
   SOLDIER_MOVEMENT_MAX_DELTA_MS,
   SOLDIER_MOVEMENT_STEP_MS
 } from "../constants";
-import type { GameState, Soldier } from "../types";
+import type { GameState, Point, Soldier } from "../types";
 import {
   clampPointToPolygon,
   moveToward,
@@ -41,7 +42,7 @@ export function updateSoldiers(state: GameState, deltaMs: number): void {
     for (let step = 0; step < steps; step += 1) {
       const speed =
         soldier.status === "attacking" || soldier.status === "returning"
-          ? ATTACK_SOLDIER_SPEED
+          ? getAttackMovementSpeed(state, { x: soldier.x, y: soldier.y })
           : SOLDIER_SPEED;
       const moved = moveToward(
         { x: soldier.x, y: soldier.y },
@@ -66,6 +67,16 @@ export function updateSoldiers(state: GameState, deltaMs: number): void {
       }
     }
   }
+}
+
+function getAttackMovementSpeed(state: GameState, point: Point): number {
+  return isPointOnLand(state, point)
+    ? ATTACK_SOLDIER_SPEED
+    : ATTACK_SOLDIER_SPEED * SEA_MOVEMENT_SPEED_MULTIPLIER;
+}
+
+function isPointOnLand(state: GameState, point: Point): boolean {
+  return state.region.landParts.some((landPart) => pointInPolygon(point, landPart.polygon));
 }
 
 export function killSoldier(state: GameState, soldier: Soldier, now: number): void {

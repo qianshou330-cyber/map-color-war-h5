@@ -84,6 +84,8 @@ export type MapLandPart = {
   id: string;
   polygon: Point[];
   minSeeds?: number;
+  seedable?: boolean;
+  attachToNearestCountry?: boolean;
 };
 
 export type MapRegion = {
@@ -106,6 +108,7 @@ export type Country = {
   displayCountryId: number;
   controllerCountryId: number;
   polygon: Point[];
+  territoryPolygons: Point[][];
   center: Point;
   area: number;
   landPartId: string;
@@ -172,6 +175,18 @@ export type AttackTask = {
   startedAt: number;
   lastBattleAt: number;
   phase: "moving" | "fighting" | "painting";
+};
+
+export type AutoAttackPlan = {
+  controllerCountryId: number;
+  enabled: boolean;
+  createdAt: number;
+  lastScheduledAt: number;
+  originWarIds: string[];
+  cooldownTargets: Array<{
+    countryId: number;
+    until: number;
+  }>;
 };
 
 export type CommandLogEntry = {
@@ -294,6 +309,7 @@ export type SerializableGameState = {
     lastBattleAt: number;
     phase: AttackTask["phase"];
   }>;
+  autoAttackPlans: AutoAttackPlan[];
   commandLog: CommandLogEntry[];
   message: string;
 };
@@ -349,6 +365,7 @@ export type GameStatePatch = {
   soldiers: Soldier[];
   deadSoldiers: DeadSoldier[];
   activeAttacks: AttackTask[];
+  autoAttackPlans: AutoAttackPlan[];
   commandLog: CommandLogEntry[];
   nextCommandLogId: number;
   message: string;
@@ -393,6 +410,7 @@ export type GameState = {
     createdAt: number;
   } | null;
   activeAttacks: AttackTask[];
+  autoAttackPlans: AutoAttackPlan[];
   nextRebelFactionId: number;
   nextRebellionCheckAt: number;
   rebelFactions: RebelFaction[];
@@ -429,8 +447,14 @@ export type Command =
       targetCountryId: number;
     }
   | {
+      type: "attackAll";
+    }
+  | {
       type: "truce";
       targetCountryId: number;
+    }
+  | {
+      type: "truceAll";
     }
   | {
       type: "ally";

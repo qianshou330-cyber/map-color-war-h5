@@ -60,6 +60,11 @@ export function createGameStatePatch(state: GameState): GameStatePatch {
       participantCountryIds: [...attack.participantCountryIds],
       attackerSoldierIds: [...attack.attackerSoldierIds]
     })),
+    autoAttackPlans: state.autoAttackPlans.map((plan) => ({
+      ...plan,
+      originWarIds: [...plan.originWarIds],
+      cooldownTargets: plan.cooldownTargets.map((target) => ({ ...target }))
+    })),
     commandLog: state.commandLog.map((entry) => ({ ...entry })),
     nextCommandLogId: state.nextCommandLogId,
     message: state.message
@@ -108,6 +113,11 @@ export function applyGameStatePatch(state: GameState, patch: GameStatePatch): bo
     ...attack,
     participantCountryIds: [...attack.participantCountryIds],
     attackerSoldierIds: [...attack.attackerSoldierIds]
+  }));
+  state.autoAttackPlans = patch.autoAttackPlans.map((plan) => ({
+    ...plan,
+    originWarIds: [...plan.originWarIds],
+    cooldownTargets: plan.cooldownTargets.map((target) => ({ ...target }))
   }));
   state.commandLog = patch.commandLog.map((entry) => ({ ...entry }));
   state.nextCommandLogId = patch.nextCommandLogId;

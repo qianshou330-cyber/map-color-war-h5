@@ -57,6 +57,7 @@ export class MapColorWarScene extends Phaser.Scene {
   private countryGraphics!: Phaser.GameObjects.Graphics;
   private routeGraphics!: Phaser.GameObjects.Graphics;
   private soldierGraphics!: Phaser.GameObjects.Graphics;
+  private combatGraphics!: Phaser.GameObjects.Graphics;
   private routeLabelLayer!: Phaser.GameObjects.Container;
   private labelLayer!: Phaser.GameObjects.Container;
   private labels = new Map<number, Phaser.GameObjects.Text>();
@@ -98,12 +99,14 @@ export class MapColorWarScene extends Phaser.Scene {
     this.countryGraphics = this.add.graphics();
     this.routeGraphics = this.add.graphics();
     this.soldierGraphics = this.add.graphics();
+    this.combatGraphics = this.add.graphics();
     this.routeLabelLayer = this.add.container(0, 0);
     this.labelLayer = this.add.container(0, 0);
     this.terrainGraphics.setDepth(0);
     this.countryGraphics.setDepth(1);
     this.routeGraphics.setDepth(3);
     this.soldierGraphics.setDepth(4);
+    this.combatGraphics.setDepth(5);
     this.routeLabelLayer.setDepth(6);
     this.labelLayer.setDepth(8);
     this.scale.on("resize", this.handleResize, this);
@@ -114,6 +117,7 @@ export class MapColorWarScene extends Phaser.Scene {
     this.drawLabels();
     this.drawAttackRoutes(0);
     this.drawSoldiers(16);
+    this.drawCombatMarkers(0);
   }
 
   update(time: number, delta: number): void {
@@ -139,6 +143,7 @@ export class MapColorWarScene extends Phaser.Scene {
     this.drawCountries();
     this.drawAttackRoutes(time);
     this.drawSoldiers(delta);
+    this.drawCombatMarkers(time);
 
     this.elapsedSinceHud += delta;
     if (this.elapsedSinceHud > 120) {
@@ -293,11 +298,13 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private drawCountry(country: Country): void {
-    const countryPath = new Phaser.Geom.Polygon(country.polygon);
     const controllerColor = getCountryColorById(this.state, country.controllerCountryId) ?? country.color;
 
     this.countryGraphics.fillStyle(controllerColor, this.getCountryFillAlpha());
-    this.countryGraphics.fillPoints(countryPath.points, true);
+    for (const polygon of this.getCountryTerritoryPolygons(country)) {
+      const countryPath = new Phaser.Geom.Polygon(polygon);
+      this.countryGraphics.fillPoints(countryPath.points, true);
+    }
 
     for (const province of country.provinces) {
       const provincePath = new Phaser.Geom.Polygon(province.polygon);
@@ -337,17 +344,19 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private strokeFactionBorderEdges(country: Country): void {
-    for (let index = 0; index < country.polygon.length; index += 1) {
-      const start = country.polygon[index];
-      const end = country.polygon[(index + 1) % country.polygon.length];
-      if (this.isInternalControllerBorder(country, start, end)) {
-        continue;
-      }
+    for (const polygon of this.getCountryTerritoryPolygons(country)) {
+      for (let index = 0; index < polygon.length; index += 1) {
+        const start = polygon[index];
+        const end = polygon[(index + 1) % polygon.length];
+        if (this.isInternalControllerBorder(country, start, end)) {
+          continue;
+        }
 
-      this.countryGraphics.beginPath();
-      this.countryGraphics.moveTo(start.x, start.y);
-      this.countryGraphics.lineTo(end.x, end.y);
-      this.countryGraphics.strokePath();
+        this.countryGraphics.beginPath();
+        this.countryGraphics.moveTo(start.x, start.y);
+        this.countryGraphics.lineTo(end.x, end.y);
+        this.countryGraphics.strokePath();
+      }
     }
   }
 
@@ -485,6 +494,102 @@ export class MapColorWarScene extends Phaser.Scene {
         this.drawRouteParticles(curve, visualState, time, routeIndex);
       });
     });
+  }
+
+  private drawCombatMarkers(time: number): void {
+    this.combatGraphics.clear();
+
+    for (const attack of this.state.activeAttacks) {
+      if (attack.phase !== "fighting") {
+        continue;
+      }
+
+      const markerPoint = this.getCombatMarkerPoint(attack);
+      if (!markerPoint) {
+        continue;
+      }
+
+      const pulse = (Math.sin(time / 260 + attack.id.length) + 1) / 2;
+      this.drawCrossedBlades(markerPoint, 5.6 + pulse * 0.8, 0.72 + pulse * 0.22);
+    }
+  }
+
+  private getCombatMarkerPoint(attack: AttackTask): Point | null {
+    const attackers = attack.attackerSoldierIds
+      .map((soldierId) => this.state.soldiers.find((soldier) => soldier.id === soldierId))
+      .filter((soldier): soldier is Soldier => Boolean(soldier?.alive));
+    const targetCountry = this.state.countries[attack.targetCountryId - 1];
+    if (!targetCountry) {
+      return null;
+    }
+
+    const defenders = this.state.soldiers.filter(
+      (soldier) =>
+        soldier.alive &&
+        soldier.countryId === targetCountry.id &&
+        soldier.status === "fighting"
+    );
+
+    if (attackers.length === 0 || defenders.length === 0) {
+      return null;
+    }
+
+    const frontLineSoldiers = [...attackers, ...defenders];
+    const total = frontLineSoldiers.reduce(
+      (sum, soldier) => {
+        const point = this.getCachedSoldierPoint(soldier);
+        sum.x += point.x;
+        sum.y += point.y;
+        return sum;
+      },
+      { x: 0, y: 0 }
+    );
+
+    const average = {
+      x: total.x / frontLineSoldiers.length,
+      y: total.y / frontLineSoldiers.length
+    };
+
+    return pointInPolygon(average, targetCountry.polygon) ? average : targetCountry.center;
+  }
+
+  private getCachedSoldierPoint(soldier: Soldier): Point {
+    return this.soldierDisplayPoints.get(soldier.id) ?? { x: soldier.x, y: soldier.y };
+  }
+
+  private drawCrossedBlades(center: Point, size: number, alpha: number): void {
+    const leftToRightStart = { x: center.x - size, y: center.y - size };
+    const leftToRightEnd = { x: center.x + size, y: center.y + size };
+    const rightToLeftStart = { x: center.x + size, y: center.y - size };
+    const rightToLeftEnd = { x: center.x - size, y: center.y + size };
+
+    this.combatGraphics.lineStyle(4.2, 0x06101f, alpha * 0.88);
+    this.strokeBlade(leftToRightStart, leftToRightEnd);
+    this.strokeBlade(rightToLeftStart, rightToLeftEnd);
+
+    this.combatGraphics.lineStyle(2, 0xf7fbff, alpha);
+    this.strokeBlade(leftToRightStart, leftToRightEnd);
+    this.strokeBlade(rightToLeftStart, rightToLeftEnd);
+
+    this.combatGraphics.lineStyle(1, 0x93a7b8, alpha * 0.9);
+    this.strokeBlade(
+      { x: leftToRightStart.x + size * 0.22, y: leftToRightStart.y + size * 0.22 },
+      { x: leftToRightEnd.x - size * 0.26, y: leftToRightEnd.y - size * 0.26 }
+    );
+    this.strokeBlade(
+      { x: rightToLeftStart.x - size * 0.22, y: rightToLeftStart.y + size * 0.22 },
+      { x: rightToLeftEnd.x + size * 0.26, y: rightToLeftEnd.y - size * 0.26 }
+    );
+
+    this.combatGraphics.fillStyle(0xf6c95a, alpha);
+    this.combatGraphics.fillRect(center.x - 1.2, center.y - 1.2, 2.4, 2.4);
+  }
+
+  private strokeBlade(start: Point, end: Point): void {
+    this.combatGraphics.beginPath();
+    this.combatGraphics.moveTo(start.x, start.y);
+    this.combatGraphics.lineTo(end.x, end.y);
+    this.combatGraphics.strokePath();
   }
 
   private createRouteCurve(from: Point, to: Point, sideOffset: number): RouteCurve {
@@ -785,8 +890,25 @@ export class MapColorWarScene extends Phaser.Scene {
     this.soldierGraphics.fillStyle(color, soldier.status === "wandering" ? 0.88 : 0.98);
     this.soldierGraphics.fillRect(x, y, size, size);
     if (isMinotaur) {
-      this.soldierGraphics.lineStyle(0.95, 0xf9c74f, 0.95);
-      this.soldierGraphics.strokeRect(x - 0.65, y - 0.65, size + 1.3, size + 1.3);
+      this.soldierGraphics.lineStyle(1, 0xf9c74f, 0.98);
+      this.soldierGraphics.strokeRect(x - 0.75, y - 0.75, size + 1.5, size + 1.5);
+      this.soldierGraphics.fillStyle(0xf9c74f, 0.96);
+      this.soldierGraphics.fillTriangle(
+        x - 0.65,
+        y + 0.15,
+        x + 0.8,
+        y - 1.9,
+        x + 1.45,
+        y + 0.15
+      );
+      this.soldierGraphics.fillTriangle(
+        x + size + 0.65,
+        y + 0.15,
+        x + size - 0.8,
+        y - 1.9,
+        x + size - 1.45,
+        y + 0.15
+      );
     }
     this.soldierGraphics.lineStyle(0.65, 0x0b1724, soldier.status === "wandering" ? 0.5 : 0.82);
     this.soldierGraphics.strokeRect(x, y, size, size);
@@ -827,11 +949,13 @@ export class MapColorWarScene extends Phaser.Scene {
     let maxY = Number.NEGATIVE_INFINITY;
 
     for (const country of this.state.countries) {
-      for (const point of country.polygon) {
+      for (const polygon of this.getCountryTerritoryPolygons(country)) {
+        for (const point of polygon) {
         minX = Math.min(minX, point.x);
         minY = Math.min(minY, point.y);
         maxX = Math.max(maxX, point.x);
         maxY = Math.max(maxY, point.y);
+        }
       }
     }
 
@@ -957,7 +1081,7 @@ export class MapColorWarScene extends Phaser.Scene {
     }
 
     const country = this.state.countries.find((candidate) =>
-      pointInPolygon(point, candidate.polygon)
+      this.isPointInCountryTerritory(point, candidate)
     );
 
     if (country) {
@@ -1039,7 +1163,8 @@ export class MapColorWarScene extends Phaser.Scene {
           country.id,
           country.center.x.toFixed(1),
           country.center.y.toFixed(1),
-          country.area.toFixed(0)
+          country.area.toFixed(0),
+          this.getCountryTerritoryPolygons(country).length
         ].join(":")
       )
       .join("|");
@@ -1135,8 +1260,8 @@ export class MapColorWarScene extends Phaser.Scene {
           }
         : weightedCountries[0].center;
 
-    if (countries.some((country) => pointInPolygon(weightedPoint, country.polygon))) {
-      const containingCountry = countries.find((country) => pointInPolygon(weightedPoint, country.polygon));
+    if (countries.some((country) => this.isPointInCountryTerritory(weightedPoint, country))) {
+      const containingCountry = countries.find((country) => this.isPointInCountryTerritory(weightedPoint, country));
       return containingCountry ? this.getSafeCountryLabelPoint(containingCountry, weightedPoint) : weightedPoint;
     }
 
@@ -1154,7 +1279,7 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private getSafeCountryLabelPoint(country: Country, preferredPoint?: Point): Point {
-    if (preferredPoint && pointInPolygon(preferredPoint, country.polygon)) {
+    if (preferredPoint && this.isPointInCountryTerritory(preferredPoint, country)) {
       return preferredPoint;
     }
 
@@ -1170,6 +1295,16 @@ export class MapColorWarScene extends Phaser.Scene {
     return [...country.polygon].sort(
       (left, right) => distance(left, country.center) - distance(right, country.center)
     )[0];
+  }
+
+  private getCountryTerritoryPolygons(country: Country): Point[][] {
+    return country.territoryPolygons && country.territoryPolygons.length > 0
+      ? country.territoryPolygons
+      : [country.polygon];
+  }
+
+  private isPointInCountryTerritory(point: Point, country: Country): boolean {
+    return this.getCountryTerritoryPolygons(country).some((polygon) => pointInPolygon(point, polygon));
   }
 
   private getLabelAreaForCountries(countries: Country[]): number {

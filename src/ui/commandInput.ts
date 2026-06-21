@@ -1,7 +1,8 @@
 import type { CommandResult, GameState } from "../types";
 import { executeCommand, parseCommand } from "../game/commands";
+import { playSfx, unlockSfx } from "../audio/sfx";
 
-const COMMAND_PREFIXES = ["加入", "进攻", "结盟", "退出结盟", "停战"];
+const COMMAND_PREFIXES = ["加入", "进攻全部", "进攻", "结盟", "退出结盟", "停战全部", "停战"];
 
 export function bindCommandInput(
   form: HTMLFormElement,
@@ -22,6 +23,8 @@ export function bindCommandInput(
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    unlockSfx();
+    playSfx("click");
     const state = getState();
     if (!state) {
       input.value = "";
@@ -32,6 +35,7 @@ export function bindCommandInput(
     if (submitCommand) {
       const result = submitCommand(inputText, state);
       if (result) {
+        playSfx(result.ok ? "click" : "error");
         onCommandLogged?.(inputText, result);
       }
       input.value = "";
@@ -43,6 +47,7 @@ export function bindCommandInput(
 
     if ("error" in parsed) {
       state.message = parsed.error;
+      playSfx("error");
       onCommandLogged?.(inputText, {
         ok: false,
         message: parsed.error
@@ -52,6 +57,9 @@ export function bindCommandInput(
     }
 
     const result = executeCommand(state, parsed);
+    if (!result.ok) {
+      playSfx("error");
+    }
     onCommandLogged?.(inputText, result);
     input.value = "";
     afterCommand();
@@ -62,6 +70,8 @@ function bindShortcutButtons(form: HTMLFormElement, input: HTMLInputElement): vo
   const buttons = form.querySelectorAll<HTMLButtonElement>("[data-command-prefix]");
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
+      unlockSfx();
+      playSfx("click");
       const prefix = button.dataset.commandPrefix;
       if (!prefix) {
         return;

@@ -110,6 +110,17 @@ export function createSerializableGameState(state: GameState): SerializableGameS
       lastBattleAt: roundNumber(attack.lastBattleAt),
       phase: attack.phase
     })),
+    autoAttackPlans: state.autoAttackPlans.map((plan) => ({
+      controllerCountryId: plan.controllerCountryId,
+      enabled: plan.enabled,
+      createdAt: roundNumber(plan.createdAt),
+      lastScheduledAt: roundNumber(plan.lastScheduledAt),
+      originWarIds: [...plan.originWarIds],
+      cooldownTargets: plan.cooldownTargets.map((target) => ({
+        countryId: target.countryId,
+        until: roundNumber(target.until)
+      }))
+    })),
     commandLog: state.commandLog.map((entry) => ({ ...entry })),
     message: state.message
   };

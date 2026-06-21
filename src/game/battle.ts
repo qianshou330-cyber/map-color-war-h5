@@ -68,9 +68,13 @@ export function startAttack(
     targetCountry,
     sourceTaskId
   );
-  const attackers = uniqueParticipantIds.flatMap((countryId) =>
-    selectAttackersFromCountry(state, countryId, targetCountry)
-  );
+  const attackers = uniqueParticipantIds.flatMap((countryId) => {
+    if (shouldHoldCounterRecruitmentForCountry(state, kind, countryId)) {
+      return [];
+    }
+
+    return selectAttackersFromCountry(state, countryId, targetCountry);
+  });
   const existingAttack = findMergeableAttack(state, kind, targetCountryId, sourceTaskId);
   const warMetadata = createWarMetadata(
     state,
@@ -338,6 +342,25 @@ export function stopAttack(
   return true;
 }
 
+export function stopAttackOriginWars(
+  state: GameState,
+  originWarIds: string[],
+  returnAttackers = true
+): number {
+  const uniqueOriginWarIds = [...new Set(originWarIds)];
+  let stoppedCount = 0;
+
+  for (const originWarId of uniqueOriginWarIds) {
+    if (state.activeAttacks.some((attack) => attack.originWarId === originWarId)) {
+      stoppedCount += 1;
+    }
+    removeAttackChainByOriginWarId(state, originWarId, returnAttackers);
+  }
+
+  cleanupOrphanCounters(state);
+  return stoppedCount;
+}
+
 function getOriginWarIdsForTarget(
   state: GameState,
   targetCountryId: number,
@@ -586,7 +609,7 @@ function updateAttackTask(state: GameState, attack: AttackTask, now: number): vo
     }
 
     if (getDefenders(state, attack).length === 0) {
-      enterPaintingPhase(state, attack);
+      enterPaintingPhaseAndPaint(state, attack);
       return;
     }
 
@@ -629,7 +652,7 @@ function resolveBattleTick(state: GameState, attack: AttackTask, now: number): v
   }
 
   if (defenders.length === 0) {
-    enterPaintingPhase(state, attack);
+    enterPaintingPhaseAndPaint(state, attack);
     return;
   }
 
@@ -681,7 +704,7 @@ function resolveBattleTick(state: GameState, attack: AttackTask, now: number): v
   if (targetCountry && isCountryFullyPaintedBy(targetCountry, attack.conquerorCountryId)) {
     annexTarget(state, attack);
   } else if (getDefenders(state, attack).length === 0) {
-    enterPaintingPhase(state, attack);
+    enterPaintingPhaseAndPaint(state, attack);
   } else if (getAttackers(state, attack).length === 0) {
     attack.phase = "moving";
     releaseDefenders(state, attack);
@@ -933,7 +956,7 @@ function recruitAttackersForTask(
       return [];
     }
 
-    if (getAliveAttackSoldierIdsForCountry(state, attack, countryId).size > 0) {
+    if (shouldHoldCounterRecruitmentForCountry(state, attack.kind, countryId)) {
       return [];
     }
 
@@ -972,15 +995,30 @@ function selectAttackersFromCountry(
   const sourceSoldiers = getAliveSoldiersInCountry(state, countryId).filter(
     (soldier) => soldier.status === "wandering" && !isSoldierInAnyAttack(state, soldier.id)
   );
-  const sendCount = Math.max(1, Math.floor(sourceSoldiers.length / 2));
 
   return sourceSoldiers
     .sort(
       (a, b) =>
         distance({ x: a.x, y: a.y }, targetCountry.center) -
         distance({ x: b.x, y: b.y }, targetCountry.center)
-    )
-    .slice(0, sendCount);
+    );
+}
+
+function shouldHoldCounterRecruitmentForCountry(
+  state: GameState,
+  kind: AttackKind,
+  countryId: number
+): boolean {
+  if (kind !== "counter") {
+    return false;
+  }
+
+  return state.activeAttacks.some(
+    (attack) =>
+      attack.kind === "attack" &&
+      attack.targetCountryId === countryId &&
+      getAttackers(state, attack).length > 0
+  );
 }
 
 function prepareRevivedAttackers(state: GameState, attack: AttackTask): void {
@@ -1181,25 +1219,6 @@ function getAttackSoldierIdsForCountry(
   return ids;
 }
 
-function getAliveAttackSoldierIdsForCountry(
-  state: GameState,
-  attack: AttackTask,
-  countryId: number
-): Set<string> {
-  const ids = new Set<string>();
-  for (const soldier of state.soldiers) {
-    if (
-      soldier.alive &&
-      soldier.countryId === countryId &&
-      attack.attackerSoldierIds.includes(soldier.id)
-    ) {
-      ids.add(soldier.id);
-    }
-  }
-
-  return ids;
-}
-
 function cleanupDeadAttackersForTask(state: GameState, attack: AttackTask): void {
   const aliveSoldierIds = new Set(
     state.soldiers.filter((soldier) => soldier.alive).map((soldier) => soldier.id)
@@ -1308,6 +1327,21 @@ function enterPaintingPhase(state: GameState, attack: AttackTask): void {
       attack.conquerorCountryId,
       soldier
     );
+  }
+}
+
+function enterPaintingPhaseAndPaint(state: GameState, attack: AttackTask): void {
+  enterPaintingPhase(state, attack);
+  if (!state.activeAttacks.includes(attack) || attack.phase !== "painting") {
+    return;
+  }
+
+  retargetPainters(state, attack);
+  paintAttackersInTarget(state, attack);
+
+  const targetCountry = getCountry(state, attack.targetCountryId);
+  if (targetCountry && isCountryFullyPaintedBy(targetCountry, attack.conquerorCountryId)) {
+    annexTarget(state, attack);
   }
 }
 

@@ -10,6 +10,7 @@ H5 地图填色多人对战原型，使用 Vite、TypeScript、Phaser、d3-delau
 - 手机端纯指令输入
 - WebSocket 单房间多人测试
 - GitHub Pages 前端部署和 Render 后端部署
+- 代码自绘交战双刀提示、Web Audio 合成音效和轻像素风 UI
 
 ## 安装
 
@@ -111,7 +112,7 @@ Fantasy 自动生成器参考《Fantasy Map Simulator》的地图层级思路：
 
 ## 当前玩法
 
-- 每局默认 60 分钟，到时自动重开。
+- 每局默认 10 分钟，到时自动重开。
 - 初始地图有 40 个国家，编号为 1-40。
 - 101-200 预留给叛乱国家。
 - 国家内部拆分为行省，进攻时逐块填色。
@@ -122,6 +123,13 @@ Fantasy 自动生成器参考《Fantasy Map Simulator》的地图层级思路：
 - 支持多线进攻和防守方反入侵。
 - 进攻兵阵亡后会复活并继续原战线，直到目标覆灭或停战。
 - 当某个控制方版图超过地图一半后，每分钟有 1% 概率触发随机叛乱。
+
+## 视觉与音效素材
+
+- 当前交战双刀图标由 Phaser Graphics 自绘，不复制第三方图标。
+- 当前点击、开战、占领、胜利和错误反馈音效由 Web Audio 合成，不打包第三方音频。
+- 如后续引入外部素材，优先使用 Kenney CC0、Freesound CC0 或 OpenGameArt CC0。
+- 如果直接使用 Game-icons 图标，需要按 CC BY 3.0 在 `public/assets/licenses/THIRD_PARTY_NOTICES.md` 记录署名。
 
 ## 网络对战结构
 

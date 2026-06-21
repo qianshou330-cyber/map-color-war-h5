@@ -1,6 +1,12 @@
 import { COUNTRY_COUNT, REBEL_FACTION_MAX_ID, SYSTEM_MESSAGES } from "../constants";
 import type { Command, CommandContext, CommandResult, Country, GameState } from "../types";
 import { getAttackRoute, type AttackRoute } from "./attackRules";
+import {
+  addAutoAttackCooldown,
+  disableAutoAttackPlan,
+  enableAutoAttackPlan,
+  updateAutoAttacks
+} from "./autoAttack";
 import { hasAttackAgainstTarget, removeAttackParticipant, startAttack, stopAttack } from "./battle";
 import { normalizeNickname, setCustomNickname } from "./playerProfile";
 import { normalizeCountryPaint } from "./provinces";
@@ -14,6 +20,7 @@ const COMMAND_TEXT = {
   nickname: "昵称",
   join: "加入",
   attack: "进攻",
+  all: "全部",
   truce: "停战",
   ally: "结盟",
   breakAlliance: "退出结盟",
@@ -36,6 +43,20 @@ export function parseCommand(input: string): Command | { error: string } {
     return { type: "setNickname", nickname };
   }
 
+  const attackAllMatch = new RegExp(
+    `^${COMMAND_TEXT.attack}\\s*${COMMAND_TEXT.all}$`
+  ).exec(text);
+  if (attackAllMatch) {
+    return { type: "attackAll" };
+  }
+
+  const truceAllMatch = new RegExp(
+    `^${COMMAND_TEXT.truce}\\s*${COMMAND_TEXT.all}$`
+  ).exec(text);
+  if (truceAllMatch) {
+    return { type: "truceAll" };
+  }
+
   const commandPattern = new RegExp(
     `^(${[
       COMMAND_TEXT.breakAlliance,
@@ -50,7 +71,7 @@ export function parseCommand(input: string): Command | { error: string } {
 
   if (!match) {
     return {
-      error: "请输入正确指令，例如 加入12、进攻8、停战8、结盟15、昵称小明"
+      error: "请输入正确指令，例如 加入12、进攻8、进攻全部、停战全部、结盟15、昵称小明"
     };
   }
 
@@ -92,8 +113,12 @@ export function executeCommand(
       return joinCountry(state, command.countryId, context);
     case "attack":
       return attackCountry(state, command.targetCountryId, now, context);
+    case "attackAll":
+      return attackAllCountries(state, now, context);
     case "truce":
-      return truceCountry(state, command.targetCountryId, context);
+      return truceCountry(state, command.targetCountryId, now, context);
+    case "truceAll":
+      return truceAllCountries(state, context);
     case "ally":
       return allyCountry(state, command.countryId, now, context);
     case "breakAlliance":
@@ -217,9 +242,33 @@ function attackCountry(
   );
 }
 
+function attackAllCountries(
+  state: GameState,
+  now: number,
+  context?: CommandContext
+): CommandResult {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0 || actor.factionId === null) {
+    return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
+  }
+
+  const plan = enableAutoAttackPlan(state, actor.factionId, now);
+  updateAutoAttacks(state, now);
+  const activeAutoAttackCount = state.activeAttacks.filter((attack) =>
+    plan.originWarIds.includes(attack.originWarId)
+  ).length;
+  const suffix =
+    activeAutoAttackCount > 0
+      ? `，已开启 ${activeAutoAttackCount} 条自动战线`
+      : "，暂无可进攻目标或可用小兵";
+
+  return setMessage(state, `${actor.factionId} 号国家开启自动进攻${suffix}`);
+}
+
 function truceCountry(
   state: GameState,
   inputTargetCountryId: number,
+  now: number,
   context?: CommandContext
 ): CommandResult {
   const targetCountry = resolvePlayableTargetCountry(state, inputTargetCountryId);
@@ -238,7 +287,27 @@ function truceCountry(
   }
 
   stopAttack(state, targetCountry.id, participantIds, actor.factionId);
+  if (actor.factionId !== null) {
+    addAutoAttackCooldown(state, actor.factionId, targetCountry.id, now);
+  }
   return setMessage(state, `已停止进攻 ${targetCountry.displayCountryId} 号国家`);
+}
+
+function truceAllCountries(
+  state: GameState,
+  context?: CommandContext
+): CommandResult {
+  const actor = getCommandActor(state, context);
+  if (actor.countryIds.length === 0 || actor.factionId === null) {
+    return setMessage(state, SYSTEM_MESSAGES.joinFirst, false);
+  }
+
+  const stoppedCount = disableAutoAttackPlan(state, actor.factionId);
+  if (stoppedCount === null) {
+    return setMessage(state, "当前没有开启自动进攻", false);
+  }
+
+  return setMessage(state, `已停止全部自动进攻，清理 ${stoppedCount} 条战线`);
 }
 
 function allyCountry(
