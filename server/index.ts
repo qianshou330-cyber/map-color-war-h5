@@ -109,17 +109,29 @@ function createRoom(roomId: string): RoomState {
 }
 
 function createServerEditableMapData(): EditableMapData {
+  const seed = getMapEnvValue(process.env.MAP_GENERATION_SEED, "room-1-rugged-archipelago");
+  const worldType = parseWorldType(
+    getMapEnvValue(process.env.MAP_GENERATION_WORLD_TYPE, "twinContinents")
+  );
   const config = normalizeMapGenerationConfig({
-    seed: process.env.MAP_GENERATION_SEED ?? "room-1-rugged-archipelago",
-    worldType: parseWorldType(process.env.MAP_GENERATION_WORLD_TYPE),
-    seaLevel: Number(process.env.MAP_GENERATION_SEA_LEVEL ?? 0.43),
-    mountainStrength: Number(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH ?? 0.68),
-    moisture: Number(process.env.MAP_GENERATION_MOISTURE ?? 0.58),
+    seed,
+    worldType,
+    seaLevel: Number(getMapEnvValue(process.env.MAP_GENERATION_SEA_LEVEL, "0.43")),
+    mountainStrength: Number(getMapEnvValue(process.env.MAP_GENERATION_MOUNTAIN_STRENGTH, "0.68")),
+    moisture: Number(getMapEnvValue(process.env.MAP_GENERATION_MOISTURE, "0.58")),
     temperature: Number(process.env.MAP_GENERATION_TEMPERATURE ?? 0.58),
-    riverCount: Number(process.env.MAP_GENERATION_RIVER_COUNT ?? 8),
+    riverCount: Number(getMapEnvValue(process.env.MAP_GENERATION_RIVER_COUNT, "10")),
     mapViewMode: parseMapViewMode(process.env.MAP_GENERATION_VIEW_MODE)
   });
   return createFantasyEditableMapData(config);
+}
+
+function getMapEnvValue(value: string | undefined, fallback: string): string {
+  const legacyDefaults = new Set(["room-1-fantasy", "continent", "0.46", "0.62", "0.56", "8"]);
+  if (!value || legacyDefaults.has(value)) {
+    return fallback;
+  }
+  return value;
 }
 
 function parseWorldType(value: string | undefined): FantasyWorldType {

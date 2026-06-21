@@ -15,14 +15,14 @@ services:
       - key: MAP_HEIGHT
         value: "700"
       - key: MAP_GENERATION_SEED
-        value: room-1-fantasy
+        value: room-1-rugged-archipelago
       - key: MAP_GENERATION_WORLD_TYPE
-        value: continent
+        value: twinContinents
       - key: MAP_GENERATION_SEA_LEVEL
-        value: "0.46"
+        value: "0.43"
       - key: MAP_GENERATION_MOUNTAIN_STRENGTH
-        value: "0.62"
+        value: "0.68"
       - key: MAP_GENERATION_MOISTURE
-        value: "0.56"
+        value: "0.58"
       - key: MAP_GENERATION_RIVER_COUNT
-        value: "8"
+        value: "10"
