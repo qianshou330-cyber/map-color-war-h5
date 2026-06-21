@@ -13,7 +13,7 @@ import { getAttackRoute } from "../game/attackRules";
 import { tickGame } from "../game/tick";
 import { getCountryColorById, getProvinceColor, getSoldierColor } from "../game/provinces";
 import { getDisplayNickname } from "../game/playerProfile";
-import { distance, distanceToSegment, pointInPolygon } from "../utils/geometry";
+import { distance, distanceToSegment, pointInPolygon, polygonArea } from "../utils/geometry";
 
 type RouteCurve = {
   start: Point;
@@ -406,7 +406,7 @@ export class MapColorWarScene extends Phaser.Scene {
           lineSpacing: -3
         })
         .setOrigin(0.5);
-      label.setStroke("#ffffff", 5);
+      label.setStroke("#ffffff", this.getLabelStrokeWidth(group.fontSize));
       label.setDepth(8);
       this.labelLayer.add(label);
       this.labels.set(group.controllerCountryId, label);
@@ -1206,9 +1206,7 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private getVisibleLabelGroups(): LabelGroup[] {
-    return this.getLabelGroups().filter(
-      (group) => group.isPlayerGroup || group.labelArea >= this.getMinLabelArea()
-    );
+    return this.getLabelGroups();
   }
 
   private getNetworkPlayerForGroup(controllerCountryId: number, countries: Country[]) {
@@ -1308,16 +1306,24 @@ export class MapColorWarScene extends Phaser.Scene {
   }
 
   private getLabelAreaForCountries(countries: Country[]): number {
-    return countries.reduce((sum, country) => sum + country.area, 0);
+    return countries.reduce((sum, country) => sum + this.getCountryTerritoryArea(country), 0);
   }
 
   private getLabelFontSize(countries: Country[], isPlayerGroup: boolean): number {
     const labelArea = this.getLabelAreaForCountries(countries);
     const maxSize = isPlayerGroup ? 14 : 17;
-    return Math.round(Phaser.Math.Clamp(Math.sqrt(labelArea) / 2.6, 11, maxSize));
+    const minSize = isPlayerGroup ? 10 : 8;
+    return Math.round(Phaser.Math.Clamp(Math.sqrt(labelArea) / 2.6, minSize, maxSize));
   }
 
-  private getMinLabelArea(): number {
-    return this.state.region.id === "fantasy" ? 620 : 120;
+  private getCountryTerritoryArea(country: Country): number {
+    return this.getCountryTerritoryPolygons(country).reduce(
+      (sum, polygon) => sum + polygonArea(polygon),
+      0
+    );
+  }
+
+  private getLabelStrokeWidth(fontSize: number): number {
+    return Math.round(Phaser.Math.Clamp(fontSize * 0.3, 3, 5));
   }
 }
