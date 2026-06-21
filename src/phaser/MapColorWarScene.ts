@@ -33,7 +33,6 @@ type RouteVisualState = {
   color: number;
   alpha: number;
   width: number;
-  label: string;
   statusText: string;
   soldierCount: number;
   isFocused: boolean;
@@ -255,7 +254,7 @@ export class MapColorWarScene extends Phaser.Scene {
         continue;
       }
 
-      this.countryGraphics.lineStyle(4, 0x06101f, 0.32);
+      this.countryGraphics.lineStyle(2.2, 0x06101f, 0.12);
       this.countryGraphics.beginPath();
       river.points.forEach((point, index) => {
         if (index === 0) {
@@ -266,7 +265,7 @@ export class MapColorWarScene extends Phaser.Scene {
       });
       this.countryGraphics.strokePath();
 
-      this.countryGraphics.lineStyle(1.7, 0x54d4ff, 0.62);
+      this.countryGraphics.lineStyle(1, 0x54d4ff, this.getMapViewMode() === "terrain" ? 0.32 : 0.22);
       this.countryGraphics.beginPath();
       river.points.forEach((point, index) => {
         if (index === 0) {
@@ -468,26 +467,19 @@ export class MapColorWarScene extends Phaser.Scene {
           this.getRouteSideOffset(routeIndex, pairIndex)
         );
         const visualState = this.getRouteVisualState(attack, sourceCountry, targetCountry);
-        const message = this.formatRouteMessage(attack, sourceCountry, targetCountry, visualState);
-
         this.routeHitAreas.push({
           attackId: attack.id,
           sourceCountryId: sourceCountry.id,
           targetCountryId: targetCountry.id,
           curve,
-          message
+          message: ""
         });
-
-        if (attack.phase === "fighting") {
-          this.drawTargetPulse(targetCountry, time, visualState.color, visualState.alpha);
-        }
 
         this.drawRouteLine(curve, {
           ...visualState,
           dashOffset: (time / 48 + attackIndex * 7 + participantIndex * 4) % 28
         });
         this.drawRouteParticles(curve, visualState, time, routeIndex);
-        this.drawRouteLabel(curve, visualState, message);
       });
     });
   }
@@ -565,7 +557,6 @@ export class MapColorWarScene extends Phaser.Scene {
       color: baseColor,
       alpha: phaseAlpha * focusMultiplier,
       width: isFocused ? phaseWidth : Math.max(1, phaseWidth - 0.8),
-      label: `${statusText} ${soldierCount}兵`,
       statusText,
       soldierCount,
       isFocused,
@@ -658,29 +649,6 @@ export class MapColorWarScene extends Phaser.Scene {
     this.routeGraphics.strokePath();
   }
 
-  private drawRouteLabel(curve: RouteCurve, visualState: RouteVisualState, message: string): void {
-    if (!visualState.isFocused && visualState.alpha < 0.35) {
-      return;
-    }
-
-    const labelPoint = this.getCurvePoint(curve, 0.52);
-    const label = this.add
-      .text(labelPoint.x, labelPoint.y, visualState.label, {
-        fontFamily: "Arial, sans-serif",
-        fontSize: "11px",
-        color: "#ffffff",
-        fontStyle: "900",
-        align: "center"
-      })
-      .setOrigin(0.5);
-    label.setPadding(5, 3, 5, 3);
-    label.setBackgroundColor("rgba(6, 16, 31, 0.78)");
-    label.setStroke("#06101f", 3);
-    label.setAlpha(Math.max(0.42, visualState.alpha));
-    label.setData("routeMessage", message);
-    this.routeLabelLayer.add(label);
-  }
-
   private drawRouteParticles(
     curve: RouteCurve,
     visualState: RouteVisualState,
@@ -717,14 +685,6 @@ export class MapColorWarScene extends Phaser.Scene {
       };
       this.routeGraphics.fillTriangle(nose.x, nose.y, left.x, left.y, right.x, right.y);
     }
-  }
-
-  private drawTargetPulse(country: Country, time: number, color: number, alpha: number): void {
-    const pulse = 0.55 + Math.sin(time / 150) * 0.25;
-    this.routeGraphics.lineStyle(4.2, 0x06101f, alpha * 0.26 * pulse);
-    this.routeGraphics.strokePoints(country.polygon, true);
-    this.routeGraphics.lineStyle(2.2, color, alpha * 0.7 * pulse);
-    this.routeGraphics.strokePoints(country.polygon, true);
   }
 
   private getCurvePoint(curve: RouteCurve, t: number): Point {
@@ -973,7 +933,6 @@ export class MapColorWarScene extends Phaser.Scene {
     if (routeHit) {
       this.focusedAttackId = routeHit.attackId;
       this.focusedCountryId = null;
-      this.onRouteSelected?.(routeHit.message);
       this.onStateChanged();
       return;
     }
@@ -986,7 +945,7 @@ export class MapColorWarScene extends Phaser.Scene {
       const relatedRoute = this.findBestRouteForCountry(country.id);
       this.focusedCountryId = country.id;
       this.focusedAttackId = relatedRoute?.attackId ?? null;
-      this.onCountrySelected?.(country.id, relatedRoute?.message);
+      this.onCountrySelected?.(country.id);
       this.onStateChanged();
       return;
     }
@@ -1038,26 +997,6 @@ export class MapColorWarScene extends Phaser.Scene {
       x: start.x + (end.x - start.x) * t,
       y: start.y + (end.y - start.y) * t
     });
-  }
-
-  private formatRouteMessage(
-    attack: AttackTask,
-    sourceCountry: Country,
-    targetCountry: Country,
-    visualState: RouteVisualState
-  ): string {
-    const warLabel = attack.originWarId.slice(-4).toUpperCase();
-    return `战线${warLabel}｜${sourceCountry.displayCountryId} -> ${targetCountry.displayCountryId}｜${visualState.statusText}｜${visualState.soldierCount}兵｜阶段：${this.getPhaseText(attack)}`;
-  }
-
-  private getPhaseText(attack: AttackTask): string {
-    if (attack.phase === "fighting") {
-      return "交战";
-    }
-    if (attack.phase === "painting") {
-      return "填色";
-    }
-    return attack.kind === "counter" ? "反推移动" : "进攻移动";
   }
 
   private getLabelSignature(): string {

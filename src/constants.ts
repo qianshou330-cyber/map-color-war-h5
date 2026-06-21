@@ -1,4 +1,4 @@
-export const COUNTRY_COUNT = 100;
+export const COUNTRY_COUNT = 40;
 export const REBEL_FACTION_START_ID = 101;
 export const REBEL_FACTION_MAX_ID = 200;
 export const MAP_WIDTH = 800;
@@ -82,7 +82,7 @@ export const REBEL_COLORS = [
 export const SYSTEM_MESSAGES = {
   invalidCommand: "请输入正确指令，例如 加入12 或 进攻8",
   joinFirst: "请先加入一个国家",
-  invalidCountryId: "国家编号必须是 1-200",
+  invalidCountryId: "国家编号必须是 1-40 或 101-200",
   attackOwnCountry: "不能进攻自己的国家",
   attackNeighborOnly: "只能进攻相邻国家",
   roundEnding: "本局结束，正在开始下一局"
