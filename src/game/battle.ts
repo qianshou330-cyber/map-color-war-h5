@@ -36,6 +36,12 @@ type DamageCredit = {
   sequence: number;
 };
 
+const ATTACK_PHASE_PRIORITY: Record<AttackTask["phase"], number> = {
+  fighting: 0,
+  painting: 1,
+  moving: 2
+};
+
 const soldierDamageCredits = new Map<string, Map<string, DamageCredit>>();
 let damageCreditSequence = 0;
 
@@ -844,22 +850,20 @@ function joinOngoingAttacksFromNewCountry(
   newCountry: Country,
   controllerCountryId: number
 ): void {
-  for (const attack of state.activeAttacks) {
-    const targetCountry = getCountry(state, attack.targetCountryId);
-    if (
-      !targetCountry ||
-      targetCountry.id === newCountry.id ||
-      targetCountry.controllerCountryId === controllerCountryId ||
-      attack.participantCountryIds.includes(newCountry.id) ||
-      !isAttackSupportedByController(state, attack, controllerCountryId) ||
-      !canAttackCountry(state, newCountry, targetCountry)
-    ) {
-      continue;
-    }
-
-    attack.participantCountryIds = [...new Set([...attack.participantCountryIds, newCountry.id])];
-    recruitAttackersForTask(state, attack);
+  const supportedAttacks = getSupportedAttacksForCountry(
+    state,
+    newCountry,
+    controllerCountryId
+  );
+  if (supportedAttacks.length === 0) {
+    return;
   }
+
+  for (const attack of supportedAttacks) {
+    attack.participantCountryIds = [...new Set([...attack.participantCountryIds, newCountry.id])];
+  }
+
+  recruitAttackersForTask(state, supportedAttacks[0], [newCountry.id]);
 }
 
 function isAttackSupportedByController(
@@ -912,14 +916,24 @@ function getCounterTaskForSource(
   );
 }
 
-function recruitAttackersForTask(state: GameState, attack: AttackTask): void {
+function recruitAttackersForTask(
+  state: GameState,
+  attack: AttackTask,
+  countryIds?: number[]
+): void {
   const targetCountry = getCountry(state, attack.targetCountryId);
   if (!targetCountry) {
     return;
   }
 
-  const recruitedAttackers = attack.participantCountryIds.flatMap((countryId) => {
-    if (getAttackSoldierIdsForCountry(state, attack, countryId).size > 0) {
+  cleanupDeadAttackersForTask(state, attack);
+  const recruitCountryIds = countryIds ?? attack.participantCountryIds;
+  const recruitedAttackers = recruitCountryIds.flatMap((countryId) => {
+    if (!attack.participantCountryIds.includes(countryId)) {
+      return [];
+    }
+
+    if (getAliveAttackSoldierIdsForCountry(state, attack, countryId).size > 0) {
       return [];
     }
 
@@ -939,6 +953,7 @@ function recruitAttackersForTask(state: GameState, attack: AttackTask): void {
   );
 
   for (const soldier of recruitedAttackers) {
+    removeSoldierFromOtherAttacks(state, soldier.id, attack.id);
     soldier.status = "attacking";
     soldier.target = getNextPaintTarget(
       state,
@@ -981,6 +996,96 @@ function prepareRevivedAttackers(state: GameState, attack: AttackTask): void {
       );
     }
   }
+}
+
+export function assignRevivedSoldiersToLatestBattles(
+  state: GameState,
+  soldiers: Soldier[]
+): void {
+  for (const soldier of soldiers) {
+    assignSoldierToLatestSupportedAttack(state, soldier);
+  }
+}
+
+function assignSoldierToLatestSupportedAttack(
+  state: GameState,
+  soldier: Soldier
+): boolean {
+  if (!soldier.alive || soldier.status !== "wandering") {
+    return false;
+  }
+
+  const country = getCountry(state, soldier.countryId);
+  if (!country) {
+    return false;
+  }
+
+  const controllerCountryId = country.controllerCountryId;
+  const attack = getLatestSupportedAttackForCountry(state, country, controllerCountryId);
+  if (!attack) {
+    return false;
+  }
+
+  attack.participantCountryIds = [...new Set([...attack.participantCountryIds, country.id])];
+  removeSoldierFromOtherAttacks(state, soldier.id, attack.id);
+  attack.attackerSoldierIds = [...new Set([...attack.attackerSoldierIds, soldier.id])];
+  attack.conquerorCountryId = getNearestParticipantControllerCountryId(
+    state,
+    attack.participantCountryIds,
+    attack.targetCountryId
+  );
+  soldier.owner = country.owner;
+  soldier.status = "attacking";
+  soldier.target = getNextPaintTarget(
+    state,
+    attack.targetCountryId,
+    attack.conquerorCountryId,
+    soldier
+  );
+  return true;
+}
+
+function getLatestSupportedAttackForCountry(
+  state: GameState,
+  country: Country,
+  controllerCountryId: number
+): AttackTask | undefined {
+  return getSupportedAttacksForCountry(state, country, controllerCountryId)[0];
+}
+
+function getSupportedAttacksForCountry(
+  state: GameState,
+  country: Country,
+  controllerCountryId: number
+): AttackTask[] {
+  return state.activeAttacks
+    .filter((attack) => {
+      const targetCountry = getCountry(state, attack.targetCountryId);
+      return Boolean(
+        targetCountry &&
+        targetCountry.id !== country.id &&
+        targetCountry.controllerCountryId !== controllerCountryId &&
+        isAttackSupportedByController(state, attack, controllerCountryId)
+      );
+    })
+    .sort(compareAttackUrgency);
+}
+
+function compareAttackUrgency(left: AttackTask, right: AttackTask): number {
+  const phaseDelta = ATTACK_PHASE_PRIORITY[left.phase] - ATTACK_PHASE_PRIORITY[right.phase];
+  if (phaseDelta !== 0) {
+    return phaseDelta;
+  }
+
+  if (left.startedAt !== right.startedAt) {
+    return right.startedAt - left.startedAt;
+  }
+
+  if (left.lastBattleAt !== right.lastBattleAt) {
+    return right.lastBattleAt - left.lastBattleAt;
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 function settleAttackerAfterAnnex(
@@ -1074,6 +1179,48 @@ function getAttackSoldierIdsForCountry(
   }
 
   return ids;
+}
+
+function getAliveAttackSoldierIdsForCountry(
+  state: GameState,
+  attack: AttackTask,
+  countryId: number
+): Set<string> {
+  const ids = new Set<string>();
+  for (const soldier of state.soldiers) {
+    if (
+      soldier.alive &&
+      soldier.countryId === countryId &&
+      attack.attackerSoldierIds.includes(soldier.id)
+    ) {
+      ids.add(soldier.id);
+    }
+  }
+
+  return ids;
+}
+
+function cleanupDeadAttackersForTask(state: GameState, attack: AttackTask): void {
+  const aliveSoldierIds = new Set(
+    state.soldiers.filter((soldier) => soldier.alive).map((soldier) => soldier.id)
+  );
+  attack.attackerSoldierIds = attack.attackerSoldierIds.filter((soldierId) =>
+    aliveSoldierIds.has(soldierId)
+  );
+}
+
+function removeSoldierFromOtherAttacks(
+  state: GameState,
+  soldierId: string,
+  keepAttackId: string
+): void {
+  for (const attack of state.activeAttacks) {
+    if (attack.id === keepAttackId) {
+      continue;
+    }
+
+    attack.attackerSoldierIds = attack.attackerSoldierIds.filter((id) => id !== soldierId);
+  }
 }
 
 function getNearestParticipantControllerCountryId(

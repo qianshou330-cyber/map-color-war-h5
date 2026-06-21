@@ -33,8 +33,8 @@ type RouteVisualState = {
   color: number;
   alpha: number;
   width: number;
-  statusText: string;
-  soldierCount: number;
+  phase: AttackTask["phase"];
+  kind: AttackTask["kind"];
   isFocused: boolean;
   isSea: boolean;
 };
@@ -467,6 +467,9 @@ export class MapColorWarScene extends Phaser.Scene {
           this.getRouteSideOffset(routeIndex, pairIndex)
         );
         const visualState = this.getRouteVisualState(attack, sourceCountry, targetCountry);
+        if (participantIndex === 0) {
+          this.drawTargetPressure(targetCountry, visualState, time, attackIndex);
+        }
         this.routeHitAreas.push({
           attackId: attack.id,
           sourceCountryId: sourceCountry.id,
@@ -530,9 +533,6 @@ export class MapColorWarScene extends Phaser.Scene {
       this.focusedAttackId === attack.id ||
       this.focusedCountryId === sourceCountry.id ||
       this.focusedCountryId === targetCountry.id;
-    const soldierCount = attack.attackerSoldierIds.filter((soldierId) =>
-      this.state.soldiers.some((soldier) => soldier.id === soldierId && soldier.alive)
-    ).length;
     const isSea = getAttackRoute(this.state, sourceCountry, targetCountry) === "sea";
     const baseColor =
       attack.kind === "counter"
@@ -540,14 +540,6 @@ export class MapColorWarScene extends Phaser.Scene {
           : isSea
             ? 0x35c9ff
             : (getCountryColorById(this.state, sourceCountry.controllerCountryId) ?? sourceCountry.color);
-    const statusText =
-      attack.phase === "fighting"
-        ? "交战"
-        : attack.phase === "painting"
-          ? "填色"
-          : attack.kind === "counter"
-            ? "反推"
-            : "进攻";
     const phaseAlpha =
       attack.phase === "fighting" ? 0.9 : attack.phase === "painting" ? 0.48 : 0.7;
     const phaseWidth = attack.phase === "painting" ? 1.55 : attack.phase === "fighting" ? 3.15 : 2.4;
@@ -557,11 +549,34 @@ export class MapColorWarScene extends Phaser.Scene {
       color: baseColor,
       alpha: phaseAlpha * focusMultiplier,
       width: isFocused ? phaseWidth : Math.max(1, phaseWidth - 0.8),
-      statusText,
-      soldierCount,
+      phase: attack.phase,
+      kind: attack.kind,
       isFocused,
       isSea
     };
+  }
+
+  private drawTargetPressure(
+    country: Country,
+    visualState: RouteVisualState,
+    time: number,
+    attackIndex: number
+  ): void {
+    if (visualState.alpha < 0.18) {
+      return;
+    }
+
+    const pulse = (Math.sin(time / 360 + attackIndex * 0.9) + 1) / 2;
+    const baseAlpha =
+      visualState.phase === "fighting" ? 0.34 : visualState.phase === "painting" ? 0.2 : 0.26;
+    const width =
+      visualState.phase === "fighting" ? 2.8 + pulse * 1.1 : 1.6 + pulse * 0.7;
+    const alpha = Math.min(0.5, baseAlpha * visualState.alpha + pulse * 0.08);
+
+    this.routeGraphics.lineStyle(width + 1.4, 0x06101f, alpha * 0.45);
+    this.routeGraphics.strokePoints(country.polygon, true);
+    this.routeGraphics.lineStyle(width, visualState.color, alpha);
+    this.routeGraphics.strokePoints(country.polygon, true);
   }
 
   private drawRouteLine(
@@ -662,7 +677,7 @@ export class MapColorWarScene extends Phaser.Scene {
     const isMobile = this.scale.width < 760;
     const particleCount = isMobile ? 1 : visualState.isFocused ? 3 : 2;
     const speed =
-      visualState.statusText === "交战" ? 1450 : visualState.statusText === "填色" ? 2100 : 1050;
+      visualState.phase === "fighting" ? 1450 : visualState.phase === "painting" ? 2100 : 1050;
     this.routeGraphics.fillStyle(visualState.color, Math.min(0.92, visualState.alpha + 0.16));
 
     for (let index = 0; index < particleCount; index += 1) {

@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import "./style.css";
-import { MAP_HEIGHT, MAP_WIDTH, MOBILE_MAP_HEIGHT, MOBILE_MAP_WIDTH } from "./constants";
+import { COUNTRY_COUNT, MAP_HEIGHT, MAP_WIDTH, MOBILE_MAP_HEIGHT, MOBILE_MAP_WIDTH } from "./constants";
 import {
   createPlayerProfile,
   getDisplayNickname,
@@ -33,6 +33,7 @@ const playerSetupRoot = requiredElement<HTMLDivElement>("#player-setup-root");
 const hudRoot = requiredElement<HTMLDivElement>("#hud-root");
 const commandChat = requiredElement<HTMLDivElement>("#command-chat");
 const commandMessage = requiredElement<HTMLDivElement>("#command-message");
+const playerStatus = requiredElement<HTMLDivElement>("#player-status");
 const commandForm = requiredElement<HTMLFormElement>("#command-form");
 const commandInput = requiredElement<HTMLInputElement>("#command-input");
 const editMapButton = requiredElement<HTMLButtonElement>("#edit-map-button");
@@ -59,6 +60,7 @@ const render = () => {
   renderHud(hudRoot, state);
   renderCommandChat(commandChat, state, selfClientId);
   renderCommandMessage(commandMessage, state);
+  renderPlayerStatus(playerStatus, state);
 };
 
 const editor = mountMapEditor({
@@ -194,6 +196,7 @@ function stopGame(): void {
   hudRoot.innerHTML = "";
   commandChat.innerHTML = "";
   commandMessage.textContent = "";
+  playerStatus.textContent = "";
   selfClientId = null;
 }
 
@@ -333,6 +336,39 @@ function getLocalPlayerFactionId(currentState: GameState): number | null {
   }
 
   return currentState.countries[currentState.playerMainCountryId - 1]?.controllerCountryId ?? null;
+}
+
+function renderPlayerStatus(root: HTMLElement, currentState: GameState): void {
+  const factionId = getLocalPlayerFactionId(currentState);
+  if (factionId === null) {
+    root.textContent = `未落座｜输入 加入1-${COUNTRY_COUNT}`;
+    root.classList.add("is-empty");
+    return;
+  }
+
+  root.classList.remove("is-empty");
+  const alliancePartnerCountryId = getLocalAlliancePartnerCountryId(currentState);
+  const allyCountry = alliancePartnerCountryId
+    ? currentState.countries[alliancePartnerCountryId - 1]
+    : undefined;
+  const allyText = allyCountry ? String(allyCountry.controllerCountryId) : "-";
+  root.textContent = `你是 ${factionId}｜盟友 ${allyText}｜战线 ${getLocalActiveAttackCount(
+    currentState,
+    alliancePartnerCountryId
+  )}`;
+}
+
+function getLocalActiveAttackCount(
+  currentState: GameState,
+  alliancePartnerCountryId: number | null
+): number {
+  const participantIds = new Set([
+    ...currentState.playerCountryIds,
+    ...(alliancePartnerCountryId !== null ? [alliancePartnerCountryId] : [])
+  ]);
+  return currentState.activeAttacks.filter((attack) =>
+    attack.participantCountryIds.some((countryId) => participantIds.has(countryId))
+  ).length;
 }
 
 function handleCountrySelected(countryId: number, routeMessage?: string): void {

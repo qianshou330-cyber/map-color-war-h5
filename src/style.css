@@ -362,7 +362,7 @@ body {
 
 #game-root {
   position: absolute;
-  inset: 44px 0 214px;
+  inset: 44px 0 232px;
   background: #0e1726;
 }
 
@@ -432,9 +432,9 @@ body {
   z-index: 3;
   display: grid;
   grid-template-columns: 1fr 96px;
-  grid-template-rows: 86px 22px 28px 48px;
+  grid-template-rows: 76px 22px 18px 28px 48px;
   gap: 6px 10px;
-  height: 214px;
+  height: 232px;
   padding: 8px 14px;
   background: rgba(9, 16, 28, 0.96);
   border-top: 1px solid rgba(255, 255, 255, 0.12);
@@ -526,6 +526,22 @@ body {
 
 #command-message.is-info {
   color: #dff6ff;
+}
+
+#player-status {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(223, 246, 255, 0.78);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#player-status.is-empty {
+  color: rgba(223, 246, 255, 0.56);
 }
 
 #command-shortcuts {
@@ -622,7 +638,7 @@ body {
 @media (max-width: 860px) {
   #game-root {
     top: 44px;
-    bottom: 148px;
+    bottom: 162px;
   }
 
   #hud-root {
@@ -650,8 +666,8 @@ body {
 
   #command-form {
     grid-template-columns: 1fr 78px;
-    grid-template-rows: 32px 20px 26px 44px;
-    height: 148px;
+    grid-template-rows: 28px 18px 16px 26px 44px;
+    height: 162px;
     padding: 5px 10px;
     gap: 5px 10px;
   }
@@ -662,7 +678,12 @@ body {
 
   #command-message {
     font-size: 13px;
-    line-height: 20px;
+    line-height: 18px;
+  }
+
+  #player-status {
+    font-size: 11px;
+    line-height: 16px;
   }
 
   #command-chat {
@@ -745,13 +766,13 @@ body {
 
 @media (pointer: coarse) {
   #game-root {
-    bottom: calc(112px + env(safe-area-inset-bottom));
+    bottom: calc(128px + env(safe-area-inset-bottom));
   }
 
   #command-form {
     grid-template-columns: 1fr;
-    grid-template-rows: 28px 18px 46px;
-    height: calc(112px + env(safe-area-inset-bottom));
+    grid-template-rows: 26px 18px 16px 46px;
+    height: calc(128px + env(safe-area-inset-bottom));
     padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
     gap: 4px;
   }
@@ -773,6 +794,11 @@ body {
   #command-message {
     font-size: 12px;
     line-height: 18px;
+  }
+
+  #player-status {
+    font-size: 10.5px;
+    line-height: 16px;
   }
 
   #command-chat {

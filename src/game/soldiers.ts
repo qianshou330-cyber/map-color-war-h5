@@ -83,8 +83,9 @@ export function killSoldier(state: GameState, soldier: Soldier, now: number): vo
   });
 }
 
-export function reviveSoldiers(state: GameState, now: number): void {
+export function reviveSoldiers(state: GameState, now: number): Soldier[] {
   const waiting = [];
+  const revivedSoldiers: Soldier[] = [];
 
   for (const dead of state.deadSoldiers) {
     if (dead.reviveAt > now) {
@@ -116,14 +117,17 @@ export function reviveSoldiers(state: GameState, now: number): void {
       status: "wandering" as const
     };
     normalizeSoldierStats(revivedSoldier);
-    state.soldiers.push({
+    const aliveSoldier = {
       ...revivedSoldier,
       hp: revivedSoldier.maxHp,
       lastHpRegenAt: now
-    });
+    };
+    state.soldiers.push(aliveSoldier);
+    revivedSoldiers.push(aliveSoldier);
   }
 
   state.deadSoldiers = waiting;
+  return revivedSoldiers;
 }
 
 export function regenerateSoldiers(state: GameState, now: number): void {

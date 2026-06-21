@@ -5,7 +5,7 @@ import {
 } from "../constants";
 import type { GameState, Size } from "../types";
 import { resetGameState } from "./state";
-import { updateBattle } from "./battle";
+import { assignRevivedSoldiersToLatestBattles, updateBattle } from "./battle";
 import { updateRebellion } from "./rebellion";
 import { regenerateSoldiers, reviveSoldiers, updateSoldiers } from "./soldiers";
 
@@ -31,7 +31,8 @@ export function tickGame(
   updateSoldiers(state, deltaMs);
   regenerateSoldiers(state, now);
   updateBattle(state, now);
-  reviveSoldiers(state, now);
+  const revivedSoldiers = reviveSoldiers(state, now);
+  assignRevivedSoldiersToLatestBattles(state, revivedSoldiers);
   if (finishRoundIfUnified(state, now)) {
     return;
   }
