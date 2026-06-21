@@ -37,6 +37,12 @@ type LandBlob = {
   asLandPart: boolean;
 };
 
+type CoastalFeature = {
+  at: number;
+  width: number;
+  amount: number;
+};
+
 export function createDefaultMapGenerationConfig(
   partial: Partial<MapGenerationConfig> = {}
 ): MapGenerationConfig {
@@ -126,7 +132,7 @@ export function createFantasyRegion(
     outlinePolygons: landParts.map((part) => part.polygon),
     generationConfig,
     terrain: createTerrainMap(width, height, generationConfig, normalizedParts),
-    rivers: createRivers(width, height, generationConfig)
+    rivers: createRivers(width, height, generationConfig, normalizedParts)
   };
 }
 
@@ -146,6 +152,10 @@ export function getTerrainCell(terrain: TerrainMap, column: number, row: number)
 }
 
 function createFantasyLandParts(config: MapGenerationConfig): Point[][] {
+  if (config.worldType === "twinContinents") {
+    return createReferenceArchipelagoLandParts(config);
+  }
+
   const blobs = createLandBlobs(config);
   const heightGrid = createHeightGrid(
     HEIGHTMAP_LAND_GRID_WIDTH,
@@ -161,6 +171,264 @@ function createFantasyLandParts(config: MapGenerationConfig): Point[][] {
   return totalArea >= MIN_TOTAL_PLAYABLE_LAND_AREA
     ? playableParts
     : createBlobFallbackLandParts(config, blobs, heightGrid);
+}
+
+function createReferenceArchipelagoLandParts(config: MapGenerationConfig): Point[][] {
+  const rng = createSeededRandom(`${config.seed}:reference-template`);
+  const parts = [
+    createReferenceContinentPolygon(
+      [
+        { x: 0.065, y: 0.42 },
+        { x: 0.13, y: 0.36 },
+        { x: 0.16, y: 0.30 },
+        { x: 0.23, y: 0.28 },
+        { x: 0.26, y: 0.22 },
+        { x: 0.35, y: 0.24 },
+        { x: 0.39, y: 0.20 },
+        { x: 0.45, y: 0.27 },
+        { x: 0.42, y: 0.36 },
+        { x: 0.47, y: 0.43 },
+        { x: 0.43, y: 0.53 },
+        { x: 0.46, y: 0.62 },
+        { x: 0.39, y: 0.67 },
+        { x: 0.36, y: 0.77 },
+        { x: 0.29, y: 0.72 },
+        { x: 0.24, y: 0.83 },
+        { x: 0.17, y: 0.74 },
+        { x: 0.12, y: 0.70 },
+        { x: 0.14, y: 0.60 },
+        { x: 0.075, y: 0.55 }
+      ],
+      config,
+      "west-main",
+      [
+        { at: 0.05, width: 0.035, amount: 0.025 },
+        { at: 0.12, width: 0.042, amount: -0.022 },
+        { at: 0.2, width: 0.03, amount: 0.026 },
+        { at: 0.34, width: 0.045, amount: -0.028 },
+        { at: 0.46, width: 0.04, amount: 0.02 },
+        { at: 0.59, width: 0.045, amount: -0.018 },
+        { at: 0.72, width: 0.035, amount: 0.025 },
+        { at: 0.86, width: 0.04, amount: -0.022 }
+      ],
+      224
+    ),
+    createReferenceContinentPolygon(
+      [
+        { x: 0.57, y: 0.38 },
+        { x: 0.61, y: 0.31 },
+        { x: 0.66, y: 0.28 },
+        { x: 0.69, y: 0.18 },
+        { x: 0.75, y: 0.26 },
+        { x: 0.84, y: 0.25 },
+        { x: 0.91, y: 0.30 },
+        { x: 0.88, y: 0.38 },
+        { x: 0.95, y: 0.44 },
+        { x: 0.9, y: 0.53 },
+        { x: 0.94, y: 0.61 },
+        { x: 0.85, y: 0.65 },
+        { x: 0.78, y: 0.73 },
+        { x: 0.72, y: 0.68 },
+        { x: 0.65, y: 0.76 },
+        { x: 0.6, y: 0.68 },
+        { x: 0.54, y: 0.66 },
+        { x: 0.56, y: 0.56 },
+        { x: 0.52, y: 0.49 },
+        { x: 0.56, y: 0.44 }
+      ],
+      config,
+      "east-main",
+      [
+        { at: 0.06, width: 0.04, amount: -0.022 },
+        { at: 0.16, width: 0.035, amount: 0.026 },
+        { at: 0.28, width: 0.05, amount: -0.024 },
+        { at: 0.4, width: 0.04, amount: 0.023 },
+        { at: 0.53, width: 0.045, amount: -0.024 },
+        { at: 0.66, width: 0.04, amount: 0.02 },
+        { at: 0.78, width: 0.035, amount: -0.02 },
+        { at: 0.9, width: 0.045, amount: 0.021 }
+      ],
+      224
+    ),
+    ...createReferenceIslandChainPolygons(config, rng)
+  ];
+
+  return filterVisibleLandParts(parts, config);
+}
+
+function createReferenceContinentPolygon(
+  anchors: Point[],
+  config: MapGenerationConfig,
+  key: string,
+  features: CoastalFeature[],
+  targetCount: number
+): Point[] {
+  const referenceAnchors = compressReferenceContinentVertically(anchors);
+  const resampled = resampleClosedPolygon(smoothClosedPolygon(referenceAnchors, 1), targetCount);
+  return addReferenceCoastDetail(resampled, config, key, features, 0.0046, 0.009);
+}
+
+function compressReferenceContinentVertically(anchors: Point[]): Point[] {
+  const centerY = 0.52;
+  const scaleY = 0.52;
+  return anchors.map((point) => ({
+    x: point.x,
+    y: clampNumber(centerY + (point.y - centerY) * scaleY, 0.075, 0.925)
+  }));
+}
+
+function createReferenceIslandChainPolygons(
+  config: MapGenerationConfig,
+  rng: SeededRandom
+): Point[][] {
+  const specs = [
+    { id: "central-north", cx: 0.5, cy: 0.33, rx: 0.044, ry: 0.032, tilt: -0.35, points: 72 },
+    { id: "central-mid", cx: 0.51, cy: 0.49, rx: 0.028, ry: 0.044, tilt: 0.2, points: 72 },
+    { id: "central-south", cx: 0.51, cy: 0.66, rx: 0.052, ry: 0.038, tilt: 0.48, points: 72 },
+    { id: "strait-small-1", cx: 0.49, cy: 0.25, rx: 0.018, ry: 0.014, tilt: 0.2, points: 28 },
+    { id: "strait-small-2", cx: 0.54, cy: 0.57, rx: 0.017, ry: 0.012, tilt: -0.1, points: 28 },
+    { id: "west-southwest", cx: 0.085, cy: 0.83, rx: 0.05, ry: 0.034, tilt: 0.2, points: 72 },
+    { id: "west-channel", cx: 0.43, cy: 0.47, rx: 0.026, ry: 0.038, tilt: -0.3, points: 48 },
+    { id: "west-south-chain", cx: 0.39, cy: 0.78, rx: 0.019, ry: 0.014, tilt: 0.5, points: 28 },
+    { id: "east-west-bay", cx: 0.56, cy: 0.33, rx: 0.042, ry: 0.03, tilt: -0.2, points: 72 },
+    { id: "east-south-bay", cx: 0.58, cy: 0.74, rx: 0.052, ry: 0.034, tilt: -0.45, points: 72 },
+    { id: "east-north-isle", cx: 0.8, cy: 0.18, rx: 0.036, ry: 0.024, tilt: 0.35, points: 48 },
+    { id: "east-offshore", cx: 0.92, cy: 0.42, rx: 0.034, ry: 0.026, tilt: 0.15, points: 48 },
+    { id: "far-channel-1", cx: 0.47, cy: 0.58, rx: 0.014, ry: 0.011, tilt: 0.1, points: 24 },
+    { id: "far-channel-2", cx: 0.55, cy: 0.26, rx: 0.015, ry: 0.011, tilt: -0.3, points: 24 },
+    { id: "south-speck-1", cx: 0.46, cy: 0.82, rx: 0.014, ry: 0.01, tilt: 0.2, points: 24 },
+    { id: "south-speck-2", cx: 0.55, cy: 0.83, rx: 0.013, ry: 0.009, tilt: -0.4, points: 24 }
+  ];
+
+  return specs.map((spec) =>
+    createReferenceIslandPolygon(
+      {
+        ...spec,
+        cx: clampNumber(spec.cx + rng.float(-0.008, 0.008), 0.04, 0.96),
+        cy: clampNumber(spec.cy + rng.float(-0.008, 0.008), 0.06, 0.94),
+        rx: spec.rx * rng.float(0.9, 1.12),
+        ry: spec.ry * rng.float(0.9, 1.12)
+      },
+      config
+    )
+  );
+}
+
+function createReferenceIslandPolygon(
+  spec: {
+    id: string;
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+    tilt: number;
+    points: number;
+  },
+  config: MapGenerationConfig
+): Point[] {
+  const polygon: Point[] = [];
+  for (let index = 0; index < spec.points; index += 1) {
+    const angle = (Math.PI * 2 * index) / spec.points;
+    const wobble =
+      (fractalNoise(
+        Math.cos(angle) * 2.5 + 7,
+        Math.sin(angle) * 2.5 - 3,
+        `${config.seed}:island:${spec.id}`,
+        3
+      ) -
+        0.5) *
+      0.24;
+    const radius = 1 + wobble;
+    const localX = Math.cos(angle) * spec.rx * radius;
+    const localY = Math.sin(angle) * spec.ry * radius;
+    polygon.push({
+      x: clamp01(spec.cx + localX * Math.cos(spec.tilt) - localY * Math.sin(spec.tilt)),
+      y: clamp01(spec.cy + localX * Math.sin(spec.tilt) + localY * Math.cos(spec.tilt))
+    });
+  }
+
+  return addReferenceCoastDetail(
+    resampleClosedPolygon(smoothClosedPolygon(polygon, 1), spec.points),
+    config,
+    `island:${spec.id}`,
+    [],
+    0.0018,
+    Math.min(0.0042, Math.max(spec.rx, spec.ry) * 0.09)
+  );
+}
+
+function addReferenceCoastDetail(
+  polygon: Point[],
+  config: MapGenerationConfig,
+  key: string,
+  features: CoastalFeature[],
+  baseAmplitude: number,
+  maxAmplitude: number
+): Point[] {
+  const centroid = averagePoint(polygon);
+  const result = polygon.map((point, index) => {
+    const previous = polygon[(index - 1 + polygon.length) % polygon.length];
+    const next = polygon[(index + 1) % polygon.length];
+    const tangent = {
+      x: next.x - previous.x,
+      y: next.y - previous.y
+    };
+    const length = Math.max(0.000001, Math.hypot(tangent.x, tangent.y));
+    let normal = {
+      x: -tangent.y / length,
+      y: tangent.x / length
+    };
+    if ((point.x - centroid.x) * normal.x + (point.y - centroid.y) * normal.y < 0) {
+      normal = {
+        x: -normal.x,
+        y: -normal.y
+      };
+    }
+
+    const progress = index / polygon.length;
+    const featureDisplacement = features.reduce((total, feature) => {
+      const distance = cyclicFractionDistance(progress, feature.at);
+      const falloff = Math.exp(-((distance * distance) / (feature.width * feature.width)));
+      return total + feature.amount * falloff;
+    }, 0);
+    const broad =
+      fractalNoise(point.x * 24 + 3, point.y * 24 - 5, `${config.seed}:${key}:broad`, 3) -
+      0.5;
+    const fine =
+      fractalNoise(point.x * 58 - 11, point.y * 58 + 17, `${config.seed}:${key}:fine`, 2) -
+      0.5;
+    const displacement = clampNumber(
+      featureDisplacement + broad * baseAmplitude + fine * baseAmplitude * 0.42,
+      -maxAmplitude,
+      maxAmplitude
+    );
+
+    return {
+      x: clampNumber(point.x + normal.x * displacement, 0.025, 0.975),
+      y: clampNumber(point.y + normal.y * displacement, 0.035, 0.965)
+    };
+  });
+
+  return resampleClosedPolygon(removeAdjacentDuplicatePoints(result), polygon.length);
+}
+
+function averagePoint(points: Point[]): Point {
+  const total = points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x,
+      y: sum.y + point.y
+    }),
+    { x: 0, y: 0 }
+  );
+  return {
+    x: total.x / Math.max(1, points.length),
+    y: total.y / Math.max(1, points.length)
+  };
+}
+
+function cyclicFractionDistance(left: number, right: number): number {
+  const raw = Math.abs(left - right);
+  return Math.min(raw, 1 - raw);
 }
 
 function filterTerrainAlignedLandParts(
@@ -646,7 +914,7 @@ function getMinVisibleLandPartArea(config: MapGenerationConfig): number {
   }
 
   if (config.worldType === "twinContinents") {
-    return 0.0035;
+    return 0.00045;
   }
 
   return 0.0045;
@@ -658,7 +926,7 @@ function getMinSeedableLandPartArea(config: MapGenerationConfig): number {
   }
 
   if (config.worldType === "twinContinents") {
-    return 0.02;
+    return 0.0065;
   }
 
   return 0.045;
@@ -886,9 +1154,13 @@ function createTerrainMap(
       const x = (column + 0.5) / TERRAIN_GRID_WIDTH;
       const y = (row + 0.5) / TERRAIN_GRID_HEIGHT;
       const rawHeightValue = heightGrid.values[row * TERRAIN_GRID_WIDTH + column] ?? 0;
+      const insideLandMask =
+        landMask.length > 0 && landMask.some((polygon) => pointInPolygon({ x, y }, polygon));
       const heightValue =
-        landMask.length > 0 && landMask.some((polygon) => pointInPolygon({ x, y }, polygon))
-          ? Math.max(rawHeightValue, config.seaLevel + 0.018)
+        landMask.length > 0
+          ? insideLandMask
+            ? Math.max(rawHeightValue, config.seaLevel + 0.018)
+            : Math.min(rawHeightValue, config.seaLevel - 0.05)
           : rawHeightValue;
       heightGrid.values[row * TERRAIN_GRID_WIDTH + column] = heightValue;
       const moistureValue = moistureAt(x, y, heightValue, config);
@@ -1017,18 +1289,23 @@ function createHeightContours(
   return contours;
 }
 
-function createRivers(width: number, height: number, config: MapGenerationConfig): River[] {
+function createRivers(
+  width: number,
+  height: number,
+  config: MapGenerationConfig,
+  landMask: Point[][] = []
+): River[] {
   const blobs = createLandBlobs(config);
   const rng = createSeededRandom(`${config.seed}:rivers`);
   const rivers: River[] = [];
 
   for (let riverIndex = 0; riverIndex < config.riverCount; riverIndex += 1) {
-    const start = findRiverStart(config, blobs, rng);
+    const start = findRiverStart(config, blobs, rng, landMask);
     if (!start) {
       continue;
     }
 
-    const points = traceRiver(start, config, blobs);
+    const points = traceRiver(start, config, blobs, landMask);
     if (points.length >= 5) {
       rivers.push({
         id: `river-${riverIndex + 1}`,
@@ -1046,14 +1323,19 @@ function createRivers(width: number, height: number, config: MapGenerationConfig
 function findRiverStart(
   config: MapGenerationConfig,
   blobs: LandBlob[],
-  rng: SeededRandom
+  rng: SeededRandom,
+  landMask: Point[][]
 ): Point | null {
   for (let attempt = 0; attempt < 420; attempt += 1) {
     const point = {
       x: rng.float(0.08, 0.92),
       y: rng.float(0.08, 0.92)
     };
-    const heightValue = heightAt(point.x, point.y, config, blobs);
+    if (landMask.length > 0 && !landMask.some((polygon) => pointInPolygon(point, polygon))) {
+      continue;
+    }
+
+    const heightValue = effectiveHeightAt(point, config, blobs, landMask);
     if (heightValue > config.seaLevel + 0.1) {
       return point;
     }
@@ -1062,13 +1344,18 @@ function findRiverStart(
   return null;
 }
 
-function traceRiver(start: Point, config: MapGenerationConfig, blobs: LandBlob[]): Point[] {
+function traceRiver(
+  start: Point,
+  config: MapGenerationConfig,
+  blobs: LandBlob[],
+  landMask: Point[][]
+): Point[] {
   const points: Point[] = [start];
   let current = start;
   const step = 1 / 82;
 
   for (let index = 0; index < RIVER_TRACE_STEPS; index += 1) {
-    const currentHeight = heightAt(current.x, current.y, config, blobs);
+    const currentHeight = effectiveHeightAt(current, config, blobs, landMask);
     if (currentHeight <= config.seaLevel + 0.01) {
       break;
     }
@@ -1081,7 +1368,7 @@ function traceRiver(start: Point, config: MapGenerationConfig, blobs: LandBlob[]
         x: clamp01(current.x + Math.cos(angle) * step),
         y: clamp01(current.y + Math.sin(angle) * step)
       };
-      const candidateHeight = heightAt(candidate.x, candidate.y, config, blobs);
+      const candidateHeight = effectiveHeightAt(candidate, config, blobs, landMask);
       if (candidateHeight < bestHeight) {
         bestHeight = candidateHeight;
         bestPoint = candidate;
@@ -1106,6 +1393,19 @@ function traceRiver(start: Point, config: MapGenerationConfig, blobs: LandBlob[]
   }
 
   return points;
+}
+
+function effectiveHeightAt(
+  point: Point,
+  config: MapGenerationConfig,
+  blobs: LandBlob[],
+  landMask: Point[][]
+): number {
+  if (landMask.length > 0 && !landMask.some((polygon) => pointInPolygon(point, polygon))) {
+    return config.seaLevel - 0.08;
+  }
+
+  return heightAt(point.x, point.y, config, blobs);
 }
 
 function heightAt(x: number, y: number, config: MapGenerationConfig, blobs: LandBlob[]): number {
