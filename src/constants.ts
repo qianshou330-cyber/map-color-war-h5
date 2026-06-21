@@ -1,10 +1,10 @@
 export const COUNTRY_COUNT = 40;
 export const REBEL_FACTION_START_ID = 101;
 export const REBEL_FACTION_MAX_ID = 200;
-export const MAP_WIDTH = 800;
-export const MAP_HEIGHT = 640;
-export const MOBILE_MAP_WIDTH = 800;
-export const MOBILE_MAP_HEIGHT = 640;
+export const MAP_WIDTH = 560;
+export const MAP_HEIGHT = 700;
+export const MOBILE_MAP_WIDTH = 560;
+export const MOBILE_MAP_HEIGHT = 700;
 export const HUD_HEIGHT = 44;
 export const COMMAND_BAR_HEIGHT = 126;
 export const GAME_DURATION_MS = 60 * 60 * 1000;
