@@ -795,12 +795,9 @@ export class MapColorWarScene extends Phaser.Scene {
   private handleResize(): void {
     const width = this.scale.width;
     const height = this.scale.height;
-    const cameraBounds = {
-      x: 0,
-      y: 0,
-      width: Math.max(1, this.state.mapSize.width),
-      height: Math.max(1, this.state.mapSize.height)
-    };
+    const cameraBounds = this.commandOnlyMode
+      ? this.getPlayableCameraBounds()
+      : this.getFullMapCameraBounds();
     const zoom = Math.min(width / cameraBounds.width, height / cameraBounds.height);
     this.cameras.main.setViewport(0, 0, width, height);
     this.cameras.main.setZoom(zoom);
@@ -808,6 +805,62 @@ export class MapColorWarScene extends Phaser.Scene {
       cameraBounds.x + cameraBounds.width / 2,
       cameraBounds.y + cameraBounds.height / 2
     );
+  }
+
+  private getFullMapCameraBounds(): { x: number; y: number; width: number; height: number } {
+    return {
+      x: 0,
+      y: 0,
+      width: Math.max(1, this.state.mapSize.width),
+      height: Math.max(1, this.state.mapSize.height)
+    };
+  }
+
+  private getPlayableCameraBounds(): { x: number; y: number; width: number; height: number } {
+    if (this.state.countries.length === 0) {
+      return this.getFullMapCameraBounds();
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const country of this.state.countries) {
+      for (const point of country.polygon) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return this.getFullMapCameraBounds();
+    }
+
+    const mapWidth = Math.max(1, this.state.mapSize.width);
+    const mapHeight = Math.max(1, this.state.mapSize.height);
+    const padding = 30;
+    const minBoundsWidth = mapWidth * 0.72;
+    const minBoundsHeight = mapHeight * 0.72;
+    const rawLeft = Math.max(0, minX - padding);
+    const rawTop = Math.max(0, minY - padding);
+    const rawRight = Math.min(mapWidth, maxX + padding);
+    const rawBottom = Math.min(mapHeight, maxY + padding);
+    const rawCenterX = (rawLeft + rawRight) / 2;
+    const rawCenterY = (rawTop + rawBottom) / 2;
+    const boundsWidth = Math.min(mapWidth, Math.max(minBoundsWidth, rawRight - rawLeft));
+    const boundsHeight = Math.min(mapHeight, Math.max(minBoundsHeight, rawBottom - rawTop));
+    const x = Phaser.Math.Clamp(rawCenterX - boundsWidth / 2, 0, mapWidth - boundsWidth);
+    const y = Phaser.Math.Clamp(rawCenterY - boundsHeight / 2, 0, mapHeight - boundsHeight);
+
+    return {
+      x,
+      y,
+      width: boundsWidth,
+      height: boundsHeight
+    };
   }
 
   private getCurrentMapSize(): Size {
